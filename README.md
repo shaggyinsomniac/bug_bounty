@@ -168,3 +168,112 @@ mypy bounty/ --strict
 ruff check bounty/ tests/
 ```
 
+---
+
+## Bulk asset ingestion
+
+`bounty scan-ips` reads a plain-text file of IPs, CIDRs, and ASNs (one per
+line, `#` lines are comments) and automatically runs the recon pipeline against
+all of them.
+
+```
+# my-scope.txt
+# Cloudflare public resolvers
+1.1.1.1
+1.0.0.1/32
+# Google ASN (demo — would expand to thousands of CIDRs)
+# AS15169
+```
+
+```bash
+bounty scan-ips --program my-program --file my-scope.txt --intensity gentle
+```
+
+Asset type is auto-detected per line:
+- `AS12345` → `asn`  (expanded via BGPView API to CIDR list)
+- `1.2.3.0/24` → `cidr`  (expanded to individual IPs, refuses < /16)
+- `1.2.3.4` → `ip`  (probed directly)
+
+IP-based targets skip subdomain enumeration and DNS resolution.  They are
+port-scanned (non-gentle intensity) then HTTP-probed at standard and alternate
+web ports (80, 443, 8080, 8443, 8000, 9000, 9090, 3000, 5000, 8888).
+
+IPs that time out within 3 seconds twice in succession are marked unreachable
+and skipped for the remainder of the scan to avoid wasting time.
+
+---
+
+## Shodan intel integration
+
+> Requires `SHODAN_API_KEY` — set it in `.env` or as an environment variable.
+
+### Setup
+
+```bash
+echo "SHODAN_API_KEY=your-key-here" >> .env
+```
+
+### Check remaining credits
+
+```bash
+bounty intel-credits
+# [bounty intel-credits] 97 query credits remaining  [OK]
+```
+
+### Run a sweep and create leads
+
+```bash
+bounty intel-sweep \
+  --query 'http.title:"Index of /" country:"US"' \
+  --max-pages 1 \
+  --program h1:my-program
+# results:      100
+# new leads:    87
+# credits used: 1
+```
+
+Useful query patterns:
+
+| Goal | Query |
+|---|---|
+| Open directory listings | `http.title:"Index of /"` |
+| Exposed .git repos | `http.html:".git/HEAD"` |
+| Spring Boot actuator | `http.title:"Spring Boot"` |
+| Default credentials | `http.title:"admin" http.html:"admin"` |
+| Expired TLS certs | `ssl.cert.expired:true` |
+| Specific org assets | `org:"Example Corp"` |
+| Custom port + banner | `port:8443 product:"nginx"` |
+
+### Review and triage leads
+
+```bash
+# List new leads
+bounty leads list --status new --limit 20
+
+# Promote a lead to an asset row
+bounty leads promote 01KR0K4YK07W5CTHVNKBTSBD7A --program h1:my-program
+
+# Dismiss a false positive
+bounty leads dismiss 01KR0K4YK07W5CTHVNKBTSBD7B
+```
+
+### Example workflow
+
+```bash
+# 1. Add a CIDR scope to a program and run recon
+echo "203.0.113.0/24" > targets.txt
+bounty scan-ips --program my-prog --file targets.txt
+
+# 2. Run a Shodan sweep for the same org
+bounty intel-sweep --query 'org:"My Target Corp"' --program my-prog --max-pages 3
+
+# 3. Review leads
+bounty leads list --program my-prog --status new
+
+# 4. Promote interesting leads to asset rows for further testing
+bounty leads promote <lead-id> --program my-prog
+
+# 5. Run recon on the promoted assets
+bounty smoke-recon --target <asset-host>
+```
+

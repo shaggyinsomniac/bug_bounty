@@ -107,7 +107,7 @@ class Target(_Base):
     id: int | None = None
     program_id: str
     scope_type: Literal["in_scope", "out_of_scope"]
-    asset_type: Literal["url", "wildcard", "cidr", "android", "ios", "other"]
+    asset_type: Literal["url", "wildcard", "cidr", "android", "ios", "other", "ip", "asn"]
     value: str
     max_severity: str | None = None
     notes: str = ""
@@ -467,4 +467,31 @@ def make_secret_preview(secret: str) -> str:
     if len(secret) <= 8:
         return secret + "…"
     return secret[:8] + "…"
+
+
+# ---------------------------------------------------------------------------
+# Leads (intel / Shodan triage)
+# ---------------------------------------------------------------------------
+
+LeadStatus = Literal["new", "promoted", "dismissed"]
+
+
+class Lead(_Base):
+    """An intel lead from Shodan or manual entry, awaiting triage."""
+
+    id: str | None = None
+    source: str = "shodan"
+    source_query: str | None = None
+    ip: str
+    port: int | None = None
+    hostnames: list[str] = Field(default_factory=list)
+    org: str | None = None
+    asn: str | None = None
+    product: str | None = None
+    title: str | None = None
+    raw_data: dict[str, Any] = Field(default_factory=dict)
+    program_id: str | None = None
+    status: LeadStatus = "new"
+    discovered_at: datetime | None = None
+
 

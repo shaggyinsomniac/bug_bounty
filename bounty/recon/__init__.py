@@ -36,6 +36,7 @@ from bounty.events import publish
 from bounty.exceptions import ToolMissingError
 from bounty.models import Asset, Target
 from bounty.recon.http_probe import probe
+from bounty.recon.ip_ranges import expand_asn, expand_cidr, is_internal_ip
 from bounty.recon.port_scan import OpenPort, scan_ports
 from bounty.recon.resolve import ResolveResult, resolve_batch
 from bounty.recon.subdomains import enumerate as enumerate_subdomains
@@ -55,6 +56,17 @@ __all__ = [
 _DEFAULT_WEB_PORTS = [80, 443]
 # Additional web ports discovered by port scan that get HTTP-probed
 _EXTRA_WEB_PORT_SERVICES = {"http", "https", "http-alt", "http-proxy", "https-alt", "dev-http"}
+# Extra ports tried when probing IP-based targets directly (non-gentle intensity)
+_IP_EXTRA_PORTS: list[tuple[str, int]] = [
+    ("http", 8080),
+    ("https", 8443),
+    ("http", 8000),
+    ("http", 9000),
+    ("http", 9090),
+    ("http", 3000),
+    ("http", 5000),
+    ("http", 8888),
+]
 
 
 def _now_iso() -> str:
@@ -340,14 +352,53 @@ async def recon_pipeline(
     asset_ids: list[str] = []
     pipeline_error: str | None = None
 
+    # ── IP-range targets: collect direct IPs before subdomain phases ─────────
+    # These are scope entries with asset_type in ('ip', 'cidr', 'asn').
+    # They bypass subdomain enumeration and DNS resolution.
+    direct_ips: set[str] = set()
+
     try:
+        # ── Phase 0: Expand IP / CIDR / ASN targets ───────────────────────────
+        for t in targets:
+            if t.scope_type != "in_scope":
+                continue
+            if t.asset_type == "ip":
+                ip = t.value.strip()
+                if not is_internal_ip(ip):
+                    direct_ips.add(ip)
+                else:
+                    bound_log.debug("skip_internal_ip", ip=ip)
+            elif t.asset_type == "cidr":
+                try:
+                    expanded = await expand_cidr(t.value)
+                    for ip in expanded:
+                        if not is_internal_ip(ip):
+                            direct_ips.add(ip)
+                except (ValueError, NotImplementedError) as exc:
+                    bound_log.warning("cidr_expansion_failed", value=t.value, error=str(exc))
+            elif t.asset_type == "asn":
+                try:
+                    cidrs = await expand_asn(t.value)
+                    for cidr in cidrs:
+                        try:
+                            for ip in await expand_cidr(cidr):
+                                if not is_internal_ip(ip):
+                                    direct_ips.add(ip)
+                        except (ValueError, NotImplementedError):
+                            pass  # CIDRs too large or IPv6 — skip silently
+                except ValueError as exc:
+                    bound_log.warning("asn_expansion_failed", value=t.value, error=str(exc))
+
+        if direct_ips:
+            bound_log.info("direct_ips_collected", count=len(direct_ips))
+
         # ── Phase 1: Subdomain enumeration ───────────────────────────────────
         await _update_scan_phase(effective_db, scan_id, "recon", "running")
 
         in_scope_domains = [
             t.value.lstrip("*.") for t in targets
             if t.scope_type == "in_scope"
-            and t.asset_type in ("wildcard", "url", "cidr")
+            and t.asset_type in ("wildcard", "url")
             and "." in t.value
         ]
 
@@ -412,11 +463,13 @@ async def recon_pipeline(
         # ── Phase 3: Port scan (intensity != gentle) ──────────────────────────
         open_ports_by_ip: dict[str, list[OpenPort]] = {}
 
-        if intensity != "gentle" and alive_hosts:
-            await _update_scan_phase(effective_db, scan_id, "port_scan", "running")
+        # Combine IPs from resolved hosts + direct IP targets for port scanning
+        _domain_ips = {r.primary_ip for r in alive_hosts.values() if r.primary_ip}
+        all_scan_ips = list(_domain_ips | direct_ips)
 
-            unique_ips = list({r.primary_ip for r in alive_hosts.values() if r.primary_ip})
-            bound_log.info("port_scan_start", ips=len(unique_ips))
+        if intensity != "gentle" and all_scan_ips:
+            await _update_scan_phase(effective_db, scan_id, "port_scan", "running")
+            bound_log.info("port_scan_start", ips=len(all_scan_ips))
 
             async def _scan_one(ip: str) -> None:
                 try:
@@ -427,11 +480,11 @@ async def recon_pipeline(
                 except Exception as exc:  # noqa: BLE001
                     bound_log.debug("port_scan_error", ip=ip, error=str(exc))
 
-            await asyncio.gather(*[_scan_one(ip) for ip in unique_ips])
+            await asyncio.gather(*[_scan_one(ip) for ip in all_scan_ips])
 
             await _update_scan_phase(
                 effective_db, scan_id, "port_scan", "completed",
-                {"scanned_ips": len(unique_ips)},
+                {"scanned_ips": len(all_scan_ips)},
             )
 
         # ── Phase 4: HTTP probe ───────────────────────────────────────────────
@@ -488,17 +541,89 @@ async def recon_pipeline(
                     )
             probed_count += 1
 
-        probe_tasks = [
-            asyncio.create_task(_probe_host(h, r))
-            for h, r in alive_hosts.items()
-        ]
-        if probe_tasks:
-            await asyncio.gather(*probe_tasks, return_exceptions=True)
+        # Per-scan unreachability tracking for direct IP probing
+        fast_fail_counts: dict[str, int] = {}
+        unreachable_ips: set[str] = set()
+
+        async def _probe_direct_ip(ip: str) -> None:
+            """Probe a direct IP target at standard + extra web ports."""
+            nonlocal probed_count
+            if ip in unreachable_ips:
+                return
+            ip_log = bound_log.bind(ip=ip)
+
+            # Standard ports always; extra ports for non-gentle intensity
+            scheme_ports: list[tuple[str, int]] = [("https", 443), ("http", 80)]
+            if intensity != "gentle":
+                scheme_ports.extend(_IP_EXTRA_PORTS)
+
+            # Merge ports found by port scanner
+            existing_ports = {p for _, p in scheme_ports}
+            for op in open_ports_by_ip.get(ip, []):
+                if op.service_guess in _EXTRA_WEB_PORT_SERVICES and op.port not in existing_ports:
+                    op_scheme = "https" if "https" in op.service_guess else "http"
+                    scheme_ports.append((op_scheme, op.port))
+                    existing_ports.add(op.port)
+
+            for scheme, port in scheme_ports:
+                if ip in unreachable_ips:
+                    break
+                url = _asset_url(scheme, ip, port)
+                result = await probe(url, verify=False)
+
+                if not result.ok:
+                    # Fast failure (<3 s) = host is not answering at all.
+                    # Mark unreachable after two consecutive fast fails.
+                    if result.elapsed_ms < 3_000:
+                        fast_fail_counts[ip] = fast_fail_counts.get(ip, 0) + 1
+                        if fast_fail_counts[ip] >= 2:
+                            unreachable_ips.add(ip)
+                            ip_log.debug(
+                                "ip_marked_unreachable",
+                                fast_fails=fast_fail_counts[ip],
+                            )
+                    ip_log.debug("probe_failed", url=url, error=result.error)
+                    continue
+
+                fast_fail_counts[ip] = 0  # reset on success
+                title = _extract_title(result.body_text)
+                asset_id = await _upsert_asset(
+                    effective_db,
+                    program_id=program_id,
+                    host=ip,
+                    scheme=scheme,
+                    port=port,
+                    ip=ip,
+                    http_status=result.status_code,
+                    title=title,
+                    server=result.server or None,
+                    tags=["ip_range"],
+                )
+                if asset_id:
+                    asset_ids.append(asset_id)
+                    await publish(
+                        "asset:updated",
+                        {
+                            "asset_id": asset_id,
+                            "url": url,
+                            "status_code": result.status_code,
+                            "program_id": program_id,
+                        },
+                        program_id=program_id,
+                    )
+            probed_count += 1
+
+        probe_tasks = [asyncio.create_task(_probe_host(h, r)) for h, r in alive_hosts.items()]
+        ip_tasks = [asyncio.create_task(_probe_direct_ip(ip)) for ip in direct_ips]
+        all_probe_tasks = probe_tasks + ip_tasks
+        if all_probe_tasks:
+            await asyncio.gather(*all_probe_tasks, return_exceptions=True)
 
         bound_log.info(
             "http_probe_done",
             probed=probed_count,
             assets_found=len(asset_ids),
+            unreachable_ips=len(unreachable_ips),
         )
         await _update_scan_phase(
             effective_db, scan_id, "http_probe", "completed",

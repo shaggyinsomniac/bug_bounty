@@ -88,6 +88,22 @@ class Settings(BaseSettings):
     port: int = 8000
     """TCP port for the FastAPI UI server."""
 
+    # --------------------------------------------------------- intel / Shodan
+    shodan_api_key: str = ""
+    """Shodan API key.  Empty string disables Shodan features.  Set via SHODAN_API_KEY env var."""
+
+    shodan_min_credits: int = 5
+    """Minimum Shodan query credits required before running search/host queries."""
+
+    intel_cache_ttl_days: int = 7
+    """Time-to-live for file-based intel/Shodan result cache, in days."""
+
+    cidr_max_size: int = 16
+    """Minimum allowed CIDR prefix length (e.g. 16 means /16 is OK but /15 is refused)."""
+
+    asn_resolve_timeout: float = 30.0
+    """Timeout in seconds for ASN → CIDR prefix lookups via BGPView API."""
+
     # --------------------------------------------------------- validators
     @field_validator("default_intensity")
     @classmethod
@@ -114,10 +130,16 @@ class Settings(BaseSettings):
         """Absolute path to the evidence storage directory."""
         return self.data_dir / "evidence"
 
+    @property
+    def intel_cache_dir(self) -> Path:
+        """Absolute path to the intel/Shodan result cache directory."""
+        return self.data_dir / "intel_cache"
+
     def ensure_dirs(self) -> None:
-        """Create data and evidence directories if they do not exist."""
+        """Create data, evidence, and intel_cache directories if they do not exist."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
+        self.intel_cache_dir.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

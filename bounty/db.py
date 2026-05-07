@@ -299,6 +299,30 @@ _SCHEMA: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)",
     "CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit_log(operation)",
+    # ------------------------------------------------------------------
+    # leads  (intel / Shodan triage)
+    # ------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS leads (
+        id            TEXT PRIMARY KEY,
+        source        TEXT NOT NULL DEFAULT 'shodan',
+        source_query  TEXT,
+        ip            TEXT NOT NULL,
+        port          INTEGER,
+        hostnames     TEXT NOT NULL DEFAULT '[]',
+        org           TEXT,
+        asn           TEXT,
+        product       TEXT,
+        title         TEXT,
+        raw_data      TEXT NOT NULL DEFAULT '{}',
+        program_id    TEXT REFERENCES programs(id) ON DELETE SET NULL,
+        status        TEXT NOT NULL DEFAULT 'new',
+        discovered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(source, ip, port)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status)",
+    "CREATE INDEX IF NOT EXISTS idx_leads_program ON leads(program_id)",
 ]
 
 # ---------------------------------------------------------------------------
@@ -470,9 +494,35 @@ ALTER TABLE secrets_validations_new RENAME TO secrets_validations;
 COMMIT;
 """
 
+_MIGRATION_V2 = """
+BEGIN TRANSACTION;
+
+CREATE TABLE IF NOT EXISTS leads (
+    id            TEXT PRIMARY KEY,
+    source        TEXT NOT NULL DEFAULT 'shodan',
+    source_query  TEXT,
+    ip            TEXT NOT NULL,
+    port          INTEGER,
+    hostnames     TEXT NOT NULL DEFAULT '[]',
+    org           TEXT,
+    asn           TEXT,
+    product       TEXT,
+    title         TEXT,
+    raw_data      TEXT NOT NULL DEFAULT '{}',
+    program_id    TEXT REFERENCES programs(id) ON DELETE SET NULL,
+    status        TEXT NOT NULL DEFAULT 'new',
+    discovered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(source, ip, port)
+);
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
     # v1 → convert INTEGER pk ids to TEXT (ULID-compatible).
     _MIGRATION_V1,
+    # v2 → add leads table for intel / Shodan triage.
+    _MIGRATION_V2,
 ]
 
 
@@ -573,6 +623,8 @@ def _recreate_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)",
         "CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit_log(operation)",
         "CREATE INDEX IF NOT EXISTS idx_targets_program ON targets(program_id)",
+        "CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status)",
+        "CREATE INDEX IF NOT EXISTS idx_leads_program ON leads(program_id)",
     ]
     for stmt in index_stmts:
         conn.execute(stmt)
