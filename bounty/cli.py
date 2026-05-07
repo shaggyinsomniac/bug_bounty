@@ -42,6 +42,9 @@ app = typer.Typer(
 leads_app = typer.Typer(help="Lead triage commands (Shodan / manual intel).")
 app.add_typer(leads_app, name="leads")
 
+findings_app = typer.Typer(help="Query and export findings from the database.")
+app.add_typer(findings_app, name="findings")
+
 log = get_logger(__name__)
 
 _INTENSITY_CHOICES = ("gentle", "normal", "aggressive")
@@ -1093,6 +1096,249 @@ def fingerprint_add_favicon_hash(
     # Invalidate module cache
     from bounty.fingerprint import favicon as _fav_module
     _fav_module._FAVICON_DB = None
+
+
+# ===========================================================================
+# findings sub-commands
+# ===========================================================================
+
+_SEVERITY_LABELS = ("critical", "high", "medium", "low", "info")
+_SEVERITY_MIN: dict[str, int] = {
+    "critical": 800,
+    "high": 600,
+    "medium": 400,
+    "low": 200,
+    "info": 0,
+}
+
+
+@findings_app.command("list")
+def findings_list(
+    program: Annotated[str | None, typer.Option("--program", "-p")] = None,
+    severity: Annotated[str | None, typer.Option("--severity", "-s",
+        help="Filter by minimum severity label: critical|high|medium|low|info")] = None,
+    category: Annotated[str | None, typer.Option("--category", "-c")] = None,
+    validated_only: Annotated[bool, typer.Option("--validated-only")] = False,
+    limit: Annotated[int, typer.Option("--limit", "-n")] = 50,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """List findings with optional filters."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _query() -> list[Any]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if program:
+            clauses.append("program_id = ?")
+            params.append(program)
+        if severity and severity in _SEVERITY_MIN:
+            clauses.append("severity >= ?")
+            params.append(_SEVERITY_MIN[severity])
+        if category:
+            clauses.append("category = ?")
+            params.append(category)
+        if validated_only:
+            clauses.append("validated = 1")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                f"SELECT id, severity_label, asset_id, title, dedup_key, category, "
+                f"severity, url FROM findings {where} ORDER BY severity DESC LIMIT ?",
+                params,
+            )
+            return list(await cur.fetchall())
+
+    try:
+        rows = asyncio.run(_query())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not rows:
+        typer.echo("No findings found.")
+        return
+
+    typer.echo(f"{'ID':<28}  {'SEV':<8}  {'CATEGORY':<25}  TITLE")
+    typer.echo("-" * 90)
+    for row in rows:
+        sev_label = str(row["severity_label"]).upper()
+        cat = str(row["category"])[:25]
+        title = str(row["title"])[:60]
+        print(f"{row['id']!s:<28}  {sev_label:<8}  {cat:<25}  {title}")
+
+    typer.echo(f"\n{len(rows)} finding(s) shown.")
+
+
+@findings_app.command("show")
+def findings_show(
+    finding_id: Annotated[str, typer.Argument()],
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Show full details for a single finding including evidence."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _fetch() -> tuple[Any, list[Any]]:
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute("SELECT * FROM findings WHERE id=?", (finding_id,))
+            row = await cur.fetchone()
+            if not row:
+                # Try prefix search
+                cur2 = await conn.execute(
+                    "SELECT * FROM findings WHERE id LIKE ? LIMIT 1", (finding_id + "%",)
+                )
+                row = await cur2.fetchone()
+            if not row:
+                return None, []
+            ev_cur = await conn.execute(
+                "SELECT id, request_raw, response_raw, curl_cmd, captured_at "
+                "FROM evidence_packages WHERE finding_id=? ORDER BY captured_at",
+                (str(row["id"]),),
+            )
+            ev_rows = list(await ev_cur.fetchall())
+            return row, ev_rows
+
+    try:
+        finding, evidence = asyncio.run(_fetch())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if finding is None:
+        typer.echo(f"Finding not found: {finding_id}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo("=" * 70)
+    typer.echo(f"  ID:         {finding['id']}")
+    typer.echo(f"  Title:      {finding['title']}")
+    typer.echo(f"  Severity:   {finding['severity']} ({finding['severity_label'].upper()})")
+    typer.echo(f"  Category:   {finding['category']}")
+    typer.echo(f"  URL:        {finding['url']}")
+    typer.echo(f"  Dedup Key:  {finding['dedup_key']}")
+    typer.echo(f"  Validated:  {bool(finding['validated'])}")
+    typer.echo(f"  Status:     {finding['status']}")
+    typer.echo(f"  CWE:        {finding['cwe'] or 'n/a'}")
+    typer.echo("")
+    typer.echo("  DESCRIPTION:")
+    typer.echo(f"    {finding['description']}")
+    typer.echo("")
+    typer.echo("  REMEDIATION:")
+    typer.echo(f"    {finding['remediation']}")
+
+    for i, ev in enumerate(evidence):
+        typer.echo("")
+        typer.echo(f"  ── Evidence #{i + 1} (captured {ev['captured_at']}) ──────────")
+        if ev["curl_cmd"]:
+            print(f"    curl_cmd: {ev['curl_cmd']}")
+        if ev["request_raw"]:
+            typer.echo("  REQUEST:")
+            for ln in str(ev["request_raw"]).splitlines()[:8]:
+                print(f"    {ln}")
+        if ev["response_raw"]:
+            typer.echo("  RESPONSE (first 20 lines):")
+            for ln in str(ev["response_raw"]).splitlines()[:20]:
+                print(f"    {ln}")
+
+    typer.echo("=" * 70)
+
+
+@findings_app.command("export")
+def findings_export(
+    format: Annotated[str, typer.Option("--format", "-f",
+        help="Output format: json or csv")] = "json",
+    out: Annotated[str | None, typer.Option("--out", "-o")] = None,
+    program: Annotated[str | None, typer.Option("--program", "-p")] = None,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Export findings to JSON or CSV."""
+    import csv
+    import io
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _fetch() -> list[Any]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if program:
+            clauses.append("program_id = ?")
+            params.append(program)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                f"SELECT f.*, "
+                f"  (SELECT GROUP_CONCAT(e.curl_cmd, '|||') FROM evidence_packages e WHERE e.finding_id=f.id) AS evidence_curls "
+                f"FROM findings f {where} ORDER BY f.severity DESC",
+                params,
+            )
+            return list(await cur.fetchall())
+
+    try:
+        rows = asyncio.run(_fetch())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if format.lower() == "json":
+        output = json.dumps(
+            [dict(zip(row.keys(), tuple(row))) for row in rows],
+            indent=2,
+            default=str,
+        )
+    else:
+        buf = io.StringIO()
+        if rows:
+            writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(dict(zip(row.keys(), tuple(row))))
+        output = buf.getvalue()
+
+    if out:
+        Path(out).write_text(output)
+        typer.echo(f"Exported {len(rows)} findings to {out}")
+    else:
+        typer.echo(output)
+
+
+@findings_app.command("count")
+def findings_count(
+    program: Annotated[str | None, typer.Option("--program", "-p")] = None,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Print a severity histogram of findings."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _count() -> list[Any]:
+        clause = "WHERE program_id=?" if program else ""
+        params = [program] if program else []
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                f"SELECT severity_label, COUNT(*) as cnt FROM findings {clause} "
+                f"GROUP BY severity_label ORDER BY MAX(severity) DESC",
+                params,
+            )
+            return list(await cur.fetchall())
+
+    try:
+        rows = asyncio.run(_count())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not rows:
+        typer.echo("No findings in database.")
+        return
+
+    total = sum(int(r["cnt"]) for r in rows)
+    typer.echo(f"Findings{' for ' + program if program else ''}:")
+    for row in rows:
+        label = str(row["severity_label"]).upper()
+        bar = "█" * min(int(row["cnt"]), 40)
+        typer.echo(f"  {label:<10}  {row['cnt']:>4}  {bar}")
+    typer.echo(f"  {'TOTAL':<10}  {total:>4}")
 
 
 if __name__ == "__main__":

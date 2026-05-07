@@ -121,3 +121,26 @@ class ResolveError(BountyError):
         self.hostname = hostname
         super().__init__(f"DNS resolution failed for {hostname!r}: {detail}")
 
+
+# ---------------------------------------------------------------------------
+# Detection errors
+# ---------------------------------------------------------------------------
+
+class DetectionError(BountyError):
+    """A detection could not be completed due to a tool or network failure.
+
+    Raised by ``Detection.run()`` when an unexpected error prevents the check
+    from completing.  Callers (the runner) log and continue; a ``DetectionError``
+    must NOT be raised simply because the target is not vulnerable.
+
+    Args:
+        detection_id: The ``Detection.id`` class variable of the failing check.
+        reason: Human-readable description of the failure.
+    """
+
+    def __init__(self, detection_id: str, reason: str) -> None:
+        self.detection_id = detection_id
+        self.reason = reason
+        super().__init__(f"Detection {detection_id!r} failed: {reason}")
+
+

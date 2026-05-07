@@ -43,7 +43,6 @@ from bounty.recon.port_scan import OpenPort, scan_ports
 from bounty.recon.resolve import ResolveResult, resolve_batch
 from bounty.recon.subdomains import enumerate as enumerate_subdomains
 from bounty.ulid import make_ulid
-
 log = get_logger(__name__)
 
 __all__ = [
@@ -459,6 +458,139 @@ async def _run_fingerprint_phase(
     await _asyncio.gather(*[_fp_one(aid) for aid in asset_ids], return_exceptions=True)
 
 
+async def _run_detect_phase(
+    db_path: Path,
+    program_id: str,
+    asset_ids: list[str],
+    probe_fn: Any,
+    bound_log: Any,
+    scan_id: str,
+) -> int:
+    """Run the detection phase for every unique asset.
+
+    Returns the total number of findings emitted.
+    Failures per-asset are logged and do NOT propagate.
+    """
+    import asyncio as _asyncio
+    import json as _json
+
+    from bounty.config import get_settings as _get_settings
+    from bounty.detect.base import DetectionContext
+    from bounty.detect.runner import run_detections
+    from bounty.detect.exposed_files._common import soft_404_check
+    from bounty.evidence.capture import capture_http_evidence
+    from bounty.models import Asset as _Asset, FingerprintResult as _FPR
+
+    settings = _get_settings()
+    sem = _asyncio.Semaphore(10)  # lower concurrency than fingerprint
+    total_findings = 0
+
+    async def _capture_fn(url: str, pr: Any, sid: str) -> Any:
+        return await capture_http_evidence(
+            url, pr, sid, db_path=db_path, data_dir=settings.data_dir
+        )
+
+    async def _detect_one(asset_id: str) -> int:
+        nonlocal total_findings
+        async with sem:
+            found = 0
+            try:
+                async with get_conn(db_path) as conn:
+                    # Load asset
+                    cursor = await conn.execute(
+                        "SELECT id, program_id, host, port, scheme, url, ip, status,"
+                        " http_status, title, server, cdn, waf, tls_issuer, tls_expiry,"
+                        " tags, seen_protocols, primary_scheme FROM assets WHERE id=?",
+                        (asset_id,),
+                    )
+                    row = await cursor.fetchone()
+                    if row is None:
+                        return 0
+
+                    tags_raw = row["tags"] or "[]"
+                    try:
+                        tags: list[str] = _json.loads(tags_raw)
+                    except Exception:  # noqa: BLE001
+                        tags = []
+
+                    seen_proto_raw = row["seen_protocols"] or "[]"
+                    try:
+                        seen_protocols: list[str] = _json.loads(seen_proto_raw)
+                    except Exception:  # noqa: BLE001
+                        seen_protocols = []
+
+                    asset = _Asset(
+                        id=str(row["id"]),
+                        program_id=str(row["program_id"]),
+                        host=str(row["host"]),
+                        port=row["port"],
+                        scheme=str(row["scheme"] or "https"),
+                        url=str(row["url"]),
+                        ip=row["ip"],
+                        status=str(row["status"] or "alive"),
+                        http_status=row["http_status"],
+                        title=row["title"],
+                        server=row["server"],
+                        cdn=row["cdn"],
+                        waf=row["waf"],
+                        tls_issuer=row["tls_issuer"],
+                        tls_expiry=row["tls_expiry"],
+                        tags=tags,
+                        seen_protocols=seen_protocols,
+                        primary_scheme=str(row["primary_scheme"] or "https"),
+                    )
+
+                    # Load fingerprints for gating
+                    fp_cur = await conn.execute(
+                        "SELECT tech, category, confidence, evidence FROM fingerprints WHERE asset_id=?",
+                        (asset_id,),
+                    )
+                    fp_rows = await fp_cur.fetchall()
+                    fingerprints = [
+                        _FPR(
+                            tech=str(r["tech"]),
+                            category=str(r["category"] or "other"),  # type: ignore[arg-type]
+                            confidence=str(r["confidence"] or "weak"),  # type: ignore[arg-type]
+                            evidence=r["evidence"] or "",
+                        )
+                        for r in fp_rows
+                    ]
+
+                det_log = bound_log.bind(asset=asset.host)
+
+                ctx = DetectionContext(
+                    probe_fn=probe_fn,
+                    capture_fn=_capture_fn,
+                    scan_id=scan_id,
+                    settings=settings,
+                    log=det_log,
+                )
+
+                # Pre-compute soft-404 status
+                is_soft_404 = await soft_404_check(asset, probe_fn)
+                ctx.set_soft_404(asset, is_soft_404)
+                if is_soft_404:
+                    det_log.debug("soft_404_detected", asset=asset.host)
+
+                async for finding in run_detections(asset, fingerprints, ctx, db_path):
+                    found += 1
+
+            except Exception as exc:  # noqa: BLE001
+                if bound_log is not None:
+                    bound_log.warning(
+                        "detect_phase_error", asset_id=asset_id, error=str(exc)
+                    )
+            return found
+
+    results = await _asyncio.gather(
+        *[_detect_one(aid) for aid in asset_ids], return_exceptions=True
+    )
+    for r in results:
+        if isinstance(r, int):
+            total_findings += r
+    return total_findings
+
+
 async def recon_pipeline(
     program_id: str,
     targets: list[Target],
@@ -810,14 +942,26 @@ async def recon_pipeline(
         )
 
         # ── Phase 5: Fingerprinting ───────────────────────────────────────
-        if asset_ids:
+        unique_asset_ids = list(dict.fromkeys(asset_ids))  # dedup, preserve order
+        if unique_asset_ids:
             await _update_scan_phase(effective_db, scan_id, "fingerprint", "running")
             await _run_fingerprint_phase(
-                effective_db, program_id, asset_ids, probe_fn=probe, bound_log=bound_log
+                effective_db, program_id, unique_asset_ids, probe_fn=probe, bound_log=bound_log
             )
             await _update_scan_phase(
                 effective_db, scan_id, "fingerprint", "completed",
-                {"assets_processed": len(asset_ids)},
+                {"assets_processed": len(unique_asset_ids)},
+            )
+
+            # ── Phase 6: Detection ─────────────────────────────────────────
+            await _update_scan_phase(effective_db, scan_id, "detect", "running")
+            findings_count = await _run_detect_phase(
+                effective_db, program_id, unique_asset_ids,
+                probe_fn=probe, bound_log=bound_log, scan_id=scan_id,
+            )
+            await _update_scan_phase(
+                effective_db, scan_id, "detect", "completed",
+                {"assets_processed": len(unique_asset_ids), "findings": findings_count},
             )
 
     except Exception as exc:  # noqa: BLE001

@@ -304,7 +304,7 @@ class ScanRequest(_Base):
 class Finding(_Base):
     """A validated vulnerability / misconfiguration finding."""
 
-    id: int | None = None
+    id: str | None = None
     program_id: str | None = None
     asset_id: str | None = None
     scan_id: str | None = None
@@ -372,9 +372,9 @@ EvidenceKind = Literal["http", "screenshot", "log"]
 class EvidencePackage(_Base):
     """Request / response + optional screenshot evidence for a finding."""
 
-    id: int | None = None
-    finding_id: int | None = None
-    secret_val_id: int | None = None
+    id: str | None = None
+    finding_id: str | None = None
+    secret_val_id: str | None = None
     kind: EvidenceKind = "http"
     request_raw: str | None = None
     response_raw: str | None = None
@@ -422,7 +422,7 @@ class SecretValidation(_Base):
 
     id: int | None = None
     asset_id: str | None = None
-    finding_id: int | None = None
+    finding_id: str | None = None
     provider: str
     secret_hash: str
     secret_preview: str
@@ -445,7 +445,7 @@ class Report(_Base):
     """A draft or submitted bug report."""
 
     id: int | None = None
-    finding_id: int
+    finding_id: str
     platform: Platform | Literal["generic"]
     status: Literal["draft", "submitted", "accepted", "closed"] = "draft"
     title: str

@@ -60,6 +60,99 @@ LOG_FORMAT=console     # console (pretty) or json (structured)
 
 ---
 
+## Current Capabilities (Phase 4 — Detection Engine)
+
+### Detection Engine (Phase 4)
+
+After fingerprinting, every live asset is scanned by the detection engine.
+The runner iterates `REGISTERED_DETECTIONS` (21 checks across 3 categories)
+and persists confirmed vulnerabilities as `findings` rows with full evidence.
+
+#### Detection Registry — 21 checks
+
+**Category 1 — Exposed Source Control (7)**
+
+| ID | Name | Severity |
+|---|---|---|
+| `exposed.source_control.git` | Exposed .git directory | 700 (high) |
+| `exposed.source_control.git-credentials` | Exposed .git-credentials | 900 (critical) |
+| `exposed.source_control.svn` | Exposed .svn directory | 700 (high) |
+| `exposed.source_control.hg` | Exposed .hg directory | 700 (high) |
+| `exposed.source_control.bzr` | Exposed .bzr directory | 700 (high) |
+| `exposed.source_control.gitlab-ci` | Exposed .gitlab-ci.yml | 300–600 |
+| `exposed.source_control.github-workflows` | Exposed workflow directory | 200 (low) |
+
+**Category 2 — Exposed Env & Config (10)**
+
+| ID | Name | Severity |
+|---|---|---|
+| `exposed.env_config.env` | Exposed .env file | 400–900 |
+| `exposed.env_config.wp-config-backup` | Exposed wp-config.php backup | 800 (critical) |
+| `exposed.env_config.config-php` | Exposed PHP config backup | 700 (high) |
+| `exposed.env_config.java-app-config` | Exposed Spring/Java config | 400–800 |
+| `exposed.env_config.rails-credentials` | Exposed Rails credentials | 800 (critical) |
+| `exposed.env_config.terraform-state` | Exposed Terraform state | 950 (critical) |
+| `exposed.env_config.docker-compose` | Exposed Docker Compose | 500–800 |
+| `exposed.env_config.kubeconfig` | Exposed kubeconfig | 950 (critical) |
+| `exposed.env_config.private-key` | Exposed PEM private key | 950 (critical) |
+| `exposed.env_config.ds-store` | Exposed .DS_Store | 200 (low) |
+
+**Category 3 — Exposed Backups & Archives (4)**
+
+| ID | Name | Severity |
+|---|---|---|
+| `exposed.backups.database-dump` | Exposed SQL database dump | 900 (critical) |
+| `exposed.backups.filesystem-archive` | Exposed filesystem backup | 800 (critical) |
+| `exposed.backups.source-map` | Exposed JS source map | 400 (medium) |
+| `exposed.backups.editor-swap` | Exposed editor swap/backup | 500 (medium) |
+
+#### False-Positive Guards
+
+Every path-based detection passes through two guards before yielding a finding:
+
+1. **Soft-404 guard** — before scanning, the runner probes a random path
+   (`/bounty-soft404-probe-xj7k9m3p`). If the server returns 200 + ≥200 bytes,
+   the asset is marked as a soft-404 site and all path-based detections are
+   skipped for that asset.
+
+2. **`is_real_file_response()`** — validates that the response body contains
+   the expected file signatures AND does not start with HTML DOCTYPE/tags
+   (catches catch-all SPA routes serving the homepage for any path).
+
+#### Evidence Capture
+
+Every confirmed finding triggers `capture_http_evidence()`, which writes the
+raw HTTP request/response to the `evidence_packages` table and links the row
+to the finding via `finding_id`. Evidence includes:
+- Request method, URL, headers
+- Response status, headers, body (first 64 KB)
+- Scan ID for provenance tracing
+
+#### Dedup / UPSERT Behaviour
+
+Findings are inserted via `ON CONFLICT(dedup_key) DO UPDATE`, so re-scanning
+an asset that still has the same vulnerability updates `updated_at` and the
+`scan_id` without creating duplicate rows. The `dedup_key` is
+`{detection_id}:{asset_id}:{path}`.
+
+#### Findings CLI Commands
+
+```bash
+bounty findings list [--limit N] [--severity LABEL] [--program PROGRAM_ID]
+bounty findings show FINDING_ID
+bounty findings count
+bounty findings export [--format json|csv] [--output FILE]
+```
+
+Example output:
+```
+ID                         SEVERITY   TITLE
+01HXYZ...                  critical   Exposed .env file at example.com/.env
+01HXYZ...                  high       Exposed .git directory at staging.example.com
+```
+
+---
+
 ## Current Capabilities (Phase 3.2)
 
 ### Fingerprinting Engine (Phase 3.2)

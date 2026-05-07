@@ -194,10 +194,10 @@ _SCHEMA: list[str] = [
     # ------------------------------------------------------------------
     """
     CREATE TABLE IF NOT EXISTS findings (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              TEXT PRIMARY KEY,
         program_id      TEXT REFERENCES programs(id) ON DELETE SET NULL,
-        asset_id        INTEGER REFERENCES assets(id) ON DELETE SET NULL,
-        scan_id         INTEGER REFERENCES scans(id) ON DELETE SET NULL,
+        asset_id        TEXT REFERENCES assets(id) ON DELETE SET NULL,
+        scan_id         TEXT REFERENCES scans(id) ON DELETE SET NULL,
         dedup_key       TEXT NOT NULL UNIQUE,  -- stable hash for deduplication
         title           TEXT NOT NULL,
         category        TEXT NOT NULL,  -- matches corpus category slugs
@@ -230,9 +230,9 @@ _SCHEMA: list[str] = [
     # ------------------------------------------------------------------
     """
     CREATE TABLE IF NOT EXISTS evidence_packages (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        finding_id      INTEGER REFERENCES findings(id) ON DELETE SET NULL,
-        secret_val_id   INTEGER REFERENCES secrets_validations(id) ON DELETE SET NULL,
+        id              TEXT PRIMARY KEY,
+        finding_id      TEXT REFERENCES findings(id) ON DELETE SET NULL,
+        secret_val_id   TEXT REFERENCES secrets_validations(id) ON DELETE SET NULL,
         kind            TEXT NOT NULL DEFAULT 'http',  -- http | screenshot | log
         request_raw     TEXT,   -- full HTTP request as text
         response_raw    TEXT,   -- full HTTP response headers + body snippet
@@ -251,8 +251,8 @@ _SCHEMA: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS secrets_validations (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        asset_id        INTEGER REFERENCES assets(id) ON DELETE SET NULL,
-        finding_id      INTEGER REFERENCES findings(id) ON DELETE SET NULL,
+        asset_id        TEXT REFERENCES assets(id) ON DELETE SET NULL,
+        finding_id      TEXT REFERENCES findings(id) ON DELETE SET NULL,
         provider        TEXT NOT NULL,   -- e.g. "aws", "stripe", "github"
         secret_hash     TEXT NOT NULL,   -- SHA-256 of the raw secret value
         secret_preview  TEXT NOT NULL,   -- first 8 chars + "…" for display
@@ -277,7 +277,7 @@ _SCHEMA: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS reports (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        finding_id  INTEGER NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+        finding_id  TEXT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
         platform    TEXT NOT NULL,   -- h1 | bugcrowd | intigriti | generic
         status      TEXT NOT NULL DEFAULT 'draft',
         -- draft | submitted | accepted | closed
@@ -647,6 +647,122 @@ ALTER TABLE fingerprints_v5 RENAME TO fingerprints;
 COMMIT;
 """
 
+_MIGRATION_V6 = """
+BEGIN TRANSACTION;
+
+-- Recreate findings with TEXT id (convert existing INTEGER ids via CAST).
+CREATE TABLE findings_v6 (
+    id              TEXT PRIMARY KEY,
+    program_id      TEXT REFERENCES programs(id) ON DELETE SET NULL,
+    asset_id        TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    scan_id         TEXT REFERENCES scans(id) ON DELETE SET NULL,
+    dedup_key       TEXT NOT NULL UNIQUE,
+    title           TEXT NOT NULL,
+    category        TEXT NOT NULL,
+    severity        INTEGER NOT NULL DEFAULT 500,
+    severity_label  TEXT NOT NULL DEFAULT 'medium',
+    status          TEXT NOT NULL DEFAULT 'new',
+    url             TEXT NOT NULL,
+    path            TEXT NOT NULL DEFAULT '',
+    description     TEXT NOT NULL DEFAULT '',
+    remediation     TEXT NOT NULL DEFAULT '',
+    cvss_score      REAL,
+    cve             TEXT,
+    cwe             TEXT,
+    validated       INTEGER NOT NULL DEFAULT 0,
+    validated_at    TEXT,
+    tags            TEXT NOT NULL DEFAULT '[]',
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+INSERT INTO findings_v6
+    SELECT CAST(id AS TEXT), program_id, asset_id, scan_id, dedup_key, title,
+           category, severity, severity_label, status, url, path, description,
+           remediation, cvss_score, cve, cwe, validated, validated_at, tags,
+           created_at, updated_at
+    FROM findings;
+
+-- Recreate evidence_packages with TEXT id and updated FKs.
+CREATE TABLE evidence_packages_v6 (
+    id              TEXT PRIMARY KEY,
+    finding_id      TEXT REFERENCES findings_v6(id) ON DELETE SET NULL,
+    secret_val_id   TEXT REFERENCES secrets_validations(id) ON DELETE SET NULL,
+    kind            TEXT NOT NULL DEFAULT 'http',
+    request_raw     TEXT,
+    response_raw    TEXT,
+    response_status INTEGER,
+    response_body_path TEXT,
+    screenshot_path TEXT,
+    curl_cmd        TEXT,
+    notes           TEXT NOT NULL DEFAULT '',
+    captured_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+INSERT INTO evidence_packages_v6
+    SELECT CAST(id AS TEXT), CAST(finding_id AS TEXT), CAST(secret_val_id AS TEXT),
+           kind, request_raw, response_raw, response_status, response_body_path,
+           screenshot_path, curl_cmd, notes, captured_at
+    FROM evidence_packages;
+
+-- Recreate reports with updated finding_id FK (TEXT).
+CREATE TABLE reports_v6 (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    finding_id  TEXT NOT NULL REFERENCES findings_v6(id) ON DELETE CASCADE,
+    platform    TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'draft',
+    title       TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    submitted_at TEXT,
+    platform_id TEXT,
+    bounty_usd  REAL,
+    notes       TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+INSERT INTO reports_v6
+    SELECT id, CAST(finding_id AS TEXT), platform, status, title, body,
+           submitted_at, platform_id, bounty_usd, notes, created_at, updated_at
+    FROM reports;
+
+-- Recreate secrets_validations with updated finding_id FK (TEXT).
+CREATE TABLE secrets_validations_v6 (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id        TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    finding_id      TEXT REFERENCES findings_v6(id) ON DELETE SET NULL,
+    provider        TEXT NOT NULL,
+    secret_hash     TEXT NOT NULL,
+    secret_preview  TEXT NOT NULL,
+    secret_pattern  TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    scope           TEXT,
+    identity        TEXT,
+    last_checked    TEXT,
+    next_check      TEXT,
+    error_message   TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(secret_hash, provider)
+);
+INSERT INTO secrets_validations_v6
+    SELECT id, asset_id, CAST(finding_id AS TEXT), provider, secret_hash,
+           secret_preview, secret_pattern, status, scope, identity,
+           last_checked, next_check, error_message, created_at, updated_at
+    FROM secrets_validations;
+
+DROP TABLE reports;
+ALTER TABLE reports_v6 RENAME TO reports;
+
+DROP TABLE evidence_packages;
+ALTER TABLE evidence_packages_v6 RENAME TO evidence_packages;
+
+DROP TABLE findings;
+ALTER TABLE findings_v6 RENAME TO findings;
+
+DROP TABLE secrets_validations;
+ALTER TABLE secrets_validations_v6 RENAME TO secrets_validations;
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
     _MIGRATION_V1,
     # v2 → add leads table for intel / Shodan triage.
@@ -659,6 +775,9 @@ _MIGRATIONS: list[str] = [
     # v5 → convert fingerprints.confidence from INTEGER (0-100) to TEXT tier
     #       (definitive | strong | weak | hint) per Phase 3.2 Principle 1.
     _MIGRATION_V5,
+    # v6 → convert findings.id and evidence_packages.id from INTEGER to TEXT (ULID).
+    #       Updates FK references in reports and secrets_validations.
+    _MIGRATION_V6,
 ]
 
 
