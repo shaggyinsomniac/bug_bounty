@@ -126,6 +126,7 @@ class Asset(_Base):
     host: str
     port: int | None = None
     scheme: str = "https"
+    """Canonical scheme (mirrors primary_scheme)."""
     url: str
     ip: str | None = None
     status: str = "discovered"
@@ -137,6 +138,10 @@ class Asset(_Base):
     tls_issuer: str | None = None
     tls_expiry: str | None = None
     tags: list[str] = Field(default_factory=list)
+    seen_protocols: list[str] = Field(default_factory=list)
+    """Protocols (schemes) observed on this host:port, e.g. ["http", "https"]."""
+    primary_scheme: str = "https"
+    """Preferred scheme for the canonical URL (https over http when both seen)."""
     last_seen: datetime | None = None
     first_seen: datetime | None = None
     created_at: datetime | None = None

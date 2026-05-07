@@ -84,12 +84,12 @@ _SCHEMA: list[str] = [
     # ------------------------------------------------------------------
     """
     CREATE TABLE IF NOT EXISTS assets (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        id          TEXT PRIMARY KEY,
         program_id  TEXT NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
         host        TEXT NOT NULL,  -- FQDN or IP
-        port        INTEGER,        -- NULL = default for scheme
+        port        INTEGER,        -- NULL = default for scheme (80/443 omitted)
         scheme      TEXT NOT NULL DEFAULT 'https',
-        url         TEXT NOT NULL,  -- canonical URL (scheme://host[:port])
+        url         TEXT NOT NULL,  -- canonical URL (primary_scheme://host[:port])
         ip          TEXT,           -- resolved IP at last probe time
         status      TEXT NOT NULL DEFAULT 'discovered',
         -- discovered | alive | dead | out_of_scope
@@ -100,16 +100,23 @@ _SCHEMA: list[str] = [
         waf         TEXT,
         tls_issuer  TEXT,
         tls_expiry  TEXT,
-        tags        TEXT NOT NULL DEFAULT '[]',  -- JSON array of strings
+        tags        TEXT NOT NULL DEFAULT '[]',      -- JSON array of strings
+        seen_protocols TEXT NOT NULL DEFAULT '[]',   -- JSON array of observed schemes
+        primary_scheme TEXT NOT NULL DEFAULT 'https',-- preferred scheme for canonical URL
         last_seen   TEXT,
         first_seen  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-        UNIQUE(program_id, url)
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        -- Uniqueness enforced via partial indexes: idx_assets_unique_base / idx_assets_unique_port
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_assets_program ON assets(program_id)",
     "CREATE INDEX IF NOT EXISTS idx_assets_host ON assets(host)",
+    # NOTE: The partial unique indexes (idx_assets_unique_base / idx_assets_unique_port)
+    # are NOT created here because init_db runs on both fresh and existing databases.
+    # On existing pre-V3 databases the data has not been deduplicated yet and the unique
+    # index creation would fail with IntegrityError.  The indexes are created by
+    # _recreate_indexes() after migration V3 has collapsed http/https duplicates.
     # ------------------------------------------------------------------
     # asset_history
     # ------------------------------------------------------------------
@@ -518,11 +525,82 @@ CREATE TABLE IF NOT EXISTS leads (
 COMMIT;
 """
 
+# v3 migration: collapse http/https duplicates, add seen_protocols + primary_scheme columns,
+# and replace UNIQUE(program_id, url) with partial unique indexes on (program_id, host[, port]).
+# The partial-index approach is required because NULL != NULL in SQLite UNIQUE constraints.
+_MIGRATION_V3 = """
+BEGIN TRANSACTION;
+
+CREATE TABLE assets_new (
+    id          TEXT PRIMARY KEY,
+    program_id  TEXT NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+    host        TEXT NOT NULL,
+    port        INTEGER,
+    scheme      TEXT NOT NULL DEFAULT 'https',
+    url         TEXT NOT NULL,
+    ip          TEXT,
+    status      TEXT NOT NULL DEFAULT 'discovered',
+    http_status INTEGER,
+    title       TEXT,
+    server      TEXT,
+    cdn         TEXT,
+    waf         TEXT,
+    tls_issuer  TEXT,
+    tls_expiry  TEXT,
+    tags        TEXT NOT NULL DEFAULT '[]',
+    seen_protocols TEXT NOT NULL DEFAULT '[]',
+    primary_scheme TEXT NOT NULL DEFAULT 'https',
+    last_seen   TEXT,
+    first_seen  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+INSERT INTO assets_new
+    (id, program_id, host, port, scheme, url, ip, status, http_status, title,
+     server, cdn, waf, tls_issuer, tls_expiry, tags, seen_protocols, primary_scheme,
+     last_seen, first_seen, created_at, updated_at)
+SELECT
+    a.id,
+    a.program_id,
+    a.host,
+    a.port,
+    CASE WHEN (SELECT COUNT(*) FROM assets s WHERE s.program_id=a.program_id AND s.host=a.host AND COALESCE(s.port,-1)=COALESCE(a.port,-1) AND s.scheme='https') > 0 THEN 'https' ELSE 'http' END,
+    CASE WHEN (SELECT COUNT(*) FROM assets s WHERE s.program_id=a.program_id AND s.host=a.host AND COALESCE(s.port,-1)=COALESCE(a.port,-1) AND s.scheme='https') > 0
+         THEN CASE WHEN a.port IS NULL THEN 'https://' || a.host ELSE 'https://' || a.host || ':' || a.port END
+         ELSE CASE WHEN a.port IS NULL THEN 'http://'  || a.host ELSE 'http://'  || a.host || ':' || a.port END
+    END,
+    a.ip, a.status, a.http_status, a.title,
+    a.server, a.cdn, a.waf, a.tls_issuer, a.tls_expiry, a.tags,
+    '[' || (SELECT GROUP_CONCAT('"' || qs.s || '"') FROM (SELECT DISTINCT scheme AS s FROM assets q WHERE q.program_id=a.program_id AND q.host=a.host AND COALESCE(q.port,-1)=COALESCE(a.port,-1) ORDER BY scheme) qs) || ']',
+    CASE WHEN (SELECT COUNT(*) FROM assets s WHERE s.program_id=a.program_id AND s.host=a.host AND COALESCE(s.port,-1)=COALESCE(a.port,-1) AND s.scheme='https') > 0 THEN 'https' ELSE 'http' END,
+    a.last_seen, a.first_seen, a.created_at, a.updated_at
+FROM assets a
+WHERE a.id = (
+    SELECT w.id FROM assets w
+    WHERE w.program_id=a.program_id AND w.host=a.host AND COALESCE(w.port,-1)=COALESCE(a.port,-1)
+    ORDER BY
+        CASE WHEN w.http_status IS NOT NULL AND w.http_status < 400 THEN 0 ELSE 1 END ASC,
+        w.scheme DESC
+    LIMIT 1
+);
+
+DELETE FROM asset_history WHERE asset_id NOT IN (SELECT id FROM assets_new);
+DELETE FROM fingerprints WHERE asset_id NOT IN (SELECT id FROM assets_new);
+DROP TABLE assets;
+ALTER TABLE assets_new RENAME TO assets;
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
     # v1 → convert INTEGER pk ids to TEXT (ULID-compatible).
     _MIGRATION_V1,
     # v2 → add leads table for intel / Shodan triage.
     _MIGRATION_V2,
+    # v3 → collapse http/https asset duplicates; add seen_protocols + primary_scheme;
+    #       replace UNIQUE(program_id, url) with partial unique indexes on (host, port).
+    _MIGRATION_V3,
 ]
 
 
@@ -606,6 +684,11 @@ def _recreate_indexes(conn: sqlite3.Connection) -> None:
     index_stmts = [
         "CREATE INDEX IF NOT EXISTS idx_assets_program ON assets(program_id)",
         "CREATE INDEX IF NOT EXISTS idx_assets_host ON assets(host)",
+        # Partial unique indexes for the (program_id, host, port) dedup key.
+        # NULL != NULL in UNIQUE constraints, so we use two partial indexes:
+        # one for default-port rows (port IS NULL) and one for custom-port rows.
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_unique_base ON assets(program_id, host) WHERE port IS NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_unique_port ON assets(program_id, host, port) WHERE port IS NOT NULL",
         "CREATE INDEX IF NOT EXISTS idx_asset_history_asset ON asset_history(asset_id)",
         "CREATE INDEX IF NOT EXISTS idx_fingerprints_asset ON fingerprints(asset_id)",
         "CREATE INDEX IF NOT EXISTS idx_scans_program ON scans(program_id)",

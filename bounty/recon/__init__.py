@@ -34,7 +34,7 @@ from bounty.config import get_settings
 from bounty.db import get_conn
 from bounty.events import publish
 from bounty.exceptions import ToolMissingError
-from bounty.models import Asset, Target
+from bounty.models import Target
 from bounty.recon.http_probe import probe
 from bounty.recon.ip_ranges import expand_asn, expand_cidr, is_internal_ip
 from bounty.recon.port_scan import OpenPort, scan_ports
@@ -173,12 +173,17 @@ async def _upsert_asset(
 ) -> str | None:
     """Insert or update an asset row, returning the asset ID (ULID).
 
+    Deduplication key is (program_id, host, canonical_port) where
+    canonical_port is NULL for standard ports (80/443).  http:// and https://
+    variants of the same host are collapsed into one row; seen_protocols tracks
+    which schemes have been observed, and primary_scheme prefers 'https'.
+
     Args:
         db_path: Path to the SQLite database.
         program_id: Owning program.
-        host: Hostname.
-        scheme: HTTP scheme.
-        port: TCP port.
+        host: Hostname or IP.
+        scheme: HTTP scheme for this probe result.
+        port: TCP port (80/443 stored as NULL canonical).
         ip: Resolved IP.
         http_status: HTTP response status code.
         title: Page title.
@@ -188,48 +193,112 @@ async def _upsert_asset(
     Returns:
         The asset row ID (ULID string), or ``None`` on error.
     """
-    url = _asset_url(scheme, host, port)
+    # Canonicalise port: store NULL for scheme-default ports so that
+    # http://host (port 80) and https://host (port 443) map to the SAME row.
+    canonical_port: int | None = port if port not in (80, 443) else None
+
+    def _make_url(s: str, p: int | None) -> str:
+        return f"{s}://{host}" if p is None else f"{s}://{host}:{p}"
+
     try:
         async with get_conn(db_path) as conn:
+            # Lookup by (program_id, host, canonical_port).  Use COALESCE(-1)
+            # so that NULL==NULL comparisons work correctly in WHERE.
             cursor = await conn.execute(
-                "SELECT id FROM assets WHERE program_id=? AND url=?",
-                (program_id, url),
+                """
+                SELECT id, seen_protocols, primary_scheme, http_status AS existing_status, title AS existing_title
+                FROM assets
+                WHERE program_id=? AND host=? AND COALESCE(port,-1)=COALESCE(?,-1)
+                """,
+                (program_id, host, canonical_port),
             )
             existing = await cursor.fetchone()
+
             if existing:
+                # Merge seen_protocols — add current scheme if not already recorded.
+                try:
+                    proto_list: list[str] = json.loads(existing["seen_protocols"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    proto_list = []
+                if scheme not in proto_list:
+                    proto_list.append(scheme)
+                proto_list = sorted(set(proto_list))
+
+                # Prefer https when both observed.
+                new_primary = "https" if "https" in proto_list else "http"
+                new_url = _make_url(new_primary, canonical_port)
+
+                # "Better data wins": prefer successful HTTP status over error.
+                existing_status: int | None = existing["existing_status"]
+
+                def _is_ok(s: int | None) -> bool:
+                    return s is not None and s < 400
+
+                use_status: int | None
+                if _is_ok(existing_status) and not _is_ok(http_status):
+                    # Keep existing good status; don't overwrite with 404 etc.
+                    use_status = None
+                else:
+                    use_status = http_status
+
+                # Prefer non-empty title.
+                use_title: str | None = title if (title and not existing["existing_title"]) else None
+
                 await conn.execute(
                     """
                     UPDATE assets SET
-                        ip=COALESCE(?,ip), http_status=COALESCE(?,http_status),
-                        title=COALESCE(?,title), server=COALESCE(?,server),
+                        seen_protocols=?, primary_scheme=?, scheme=?, url=?,
+                        ip=COALESCE(?,ip),
+                        http_status=COALESCE(?,http_status),
+                        title=COALESCE(?,title),
+                        server=COALESCE(?,server),
                         status='alive', last_seen=?, updated_at=?
                     WHERE id=?
                     """,
-                    (ip, http_status, title, server, _now_iso(), _now_iso(), existing["id"]),
+                    (
+                        json.dumps(proto_list),
+                        new_primary, new_primary, new_url,
+                        ip,
+                        use_status,
+                        use_title,
+                        server,
+                        _now_iso(), _now_iso(), existing["id"],
+                    ),
                 )
                 await conn.commit()
                 return str(existing["id"])
+
+            # ── New row ─────────────────────────────────────────────────────
             new_id = make_ulid()
+            insert_url = _make_url(scheme, canonical_port)
             await conn.execute(
                 """
                 INSERT INTO assets
                     (id, program_id, host, port, scheme, url, ip, status,
-                     http_status, title, server, tags, last_seen, first_seen,
-                     created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,'alive',?,?,?,?,?,?,?,?)
+                     http_status, title, server, tags,
+                     seen_protocols, primary_scheme,
+                     last_seen, first_seen, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,'alive',?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     new_id,
-                    program_id, host, port if port not in (80, 443) else None,
-                    scheme, url, ip, http_status, title, server,
-                    json.dumps(tags), _now_iso(), _now_iso(),
+                    program_id, host, canonical_port,
+                    scheme, insert_url, ip, http_status, title, server,
+                    json.dumps(tags),
+                    json.dumps([scheme]),  # seen_protocols = [current scheme]
+                    scheme,               # primary_scheme
+                    _now_iso(), _now_iso(),
                     _now_iso(), _now_iso(),
                 ),
             )
             await conn.commit()
             return new_id
     except Exception as exc:  # noqa: BLE001
-        log.error("asset_upsert_failed", url=url, error=str(exc), exc_info=True)
+        log.error(
+            "asset_upsert_failed",
+            host=host, scheme=scheme, port=port,
+            error=str(exc), exc_info=True,
+        )
         return None
 
 
@@ -352,6 +421,11 @@ async def recon_pipeline(
     asset_ids: list[str] = []
     pipeline_error: str | None = None
 
+    # Determine target mix — controls which phases are relevant.
+    in_scope_targets = [t for t in targets if t.scope_type == "in_scope"]
+    has_domains = any(t.asset_type in ("url", "wildcard") for t in in_scope_targets)
+    has_ips = any(t.asset_type in ("ip", "cidr", "asn") for t in in_scope_targets)
+
     # ── IP-range targets: collect direct IPs before subdomain phases ─────────
     # These are scope entries with asset_type in ('ip', 'cidr', 'asn').
     # They bypass subdomain enumeration and DNS resolution.
@@ -359,9 +433,7 @@ async def recon_pipeline(
 
     try:
         # ── Phase 0: Expand IP / CIDR / ASN targets ───────────────────────────
-        for t in targets:
-            if t.scope_type != "in_scope":
-                continue
+        for t in in_scope_targets:
             if t.asset_type == "ip":
                 ip = t.value.strip()
                 if not is_internal_ip(ip):
@@ -392,73 +464,83 @@ async def recon_pipeline(
         if direct_ips:
             bound_log.info("direct_ips_collected", count=len(direct_ips))
 
-        # ── Phase 1: Subdomain enumeration ───────────────────────────────────
-        await _update_scan_phase(effective_db, scan_id, "recon", "running")
+        # ── Phase 1: Subdomain enumeration (domain targets only) ─────────────
+        alive_hosts: dict[str, ResolveResult] = {}
 
-        in_scope_domains = [
-            t.value.lstrip("*.") for t in targets
-            if t.scope_type == "in_scope"
-            and t.asset_type in ("wildcard", "url")
-            and "." in t.value
-        ]
+        if has_domains:
+            await _update_scan_phase(effective_db, scan_id, "recon", "running")
 
-        # Seed with exact domains even without subfinder
-        for t in targets:
-            if t.scope_type == "in_scope" and t.asset_type in ("url", "wildcard"):
-                host = t.value.lstrip("*.")
-                if host:
-                    discovered_hosts.add(host.lower())
+            in_scope_domains = [
+                t.value.lstrip("*.") for t in targets
+                if t.scope_type == "in_scope"
+                and t.asset_type in ("wildcard", "url")
+                and "." in t.value
+            ]
 
-        for domain in list(dict.fromkeys(in_scope_domains)):
-            try:
-                async for hostname in enumerate_subdomains(
-                    domain,
-                    intensity=intensity,
-                    known_hosts=discovered_hosts,
-                ):
-                    discovered_hosts.add(hostname)
-                    await publish(
-                        "asset:new",
-                        {"hostname": hostname, "source": "subfinder", "program_id": program_id},
-                        program_id=program_id,
+            # Seed with exact domains even without subfinder
+            for t in targets:
+                if t.scope_type == "in_scope" and t.asset_type in ("url", "wildcard"):
+                    host = t.value.lstrip("*.")
+                    if host:
+                        discovered_hosts.add(host.lower())
+
+            for domain in list(dict.fromkeys(in_scope_domains)):
+                try:
+                    async for hostname in enumerate_subdomains(
+                        domain,
+                        intensity=intensity,
+                        known_hosts=discovered_hosts,
+                    ):
+                        discovered_hosts.add(hostname)
+                        await publish(
+                            "asset:new",
+                            {"hostname": hostname, "source": "subfinder", "program_id": program_id},
+                            program_id=program_id,
+                        )
+                except ToolMissingError:
+                    bound_log.warning(
+                        "subfinder_not_installed",
+                        domain=domain,
+                        hint="Install subfinder to enable subdomain enumeration",
                     )
-            except ToolMissingError:
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    bound_log.error("subfinder_error", domain=domain, error=str(exc))
+
+            bound_log.info("enumeration_done", hosts=len(discovered_hosts))
+
+            await _update_scan_phase(
+                effective_db, scan_id, "recon", "completed",
+                {"discovered": len(discovered_hosts)},
+            )
+
+            # ── Phase 2: DNS resolution ───────────────────────────────────────
+            await _update_scan_phase(
+                effective_db, scan_id, "resolve", "running",
+                {"queued": len(discovered_hosts)},
+            )
+
+            resolve_results: dict[str, ResolveResult] = {}
+            if discovered_hosts:
+                resolve_results = await resolve_batch(list(discovered_hosts), concurrency=50)
+
+            alive_hosts = {h: r for h, r in resolve_results.items() if r.alive}
+            bound_log.info("resolve_done", total=len(resolve_results), alive=len(alive_hosts))
+
+            if not alive_hosts:
                 bound_log.warning(
-                    "subfinder_not_installed",
-                    domain=domain,
-                    hint="Install subfinder to enable subdomain enumeration",
+                    "zero_alive_hosts",
+                    hint="Check DNS / scope config",
+                    domains_tried=len(discovered_hosts),
                 )
-                break
-            except Exception as exc:  # noqa: BLE001
-                bound_log.error("subfinder_error", domain=domain, error=str(exc))
 
-        bound_log.info("enumeration_done", hosts=len(discovered_hosts))
-
-        await _update_scan_phase(
-            effective_db, scan_id, "recon", "completed",
-            {"discovered": len(discovered_hosts)},
-        )
-
-        # ── Phase 2: DNS resolution ───────────────────────────────────────────
-        await _update_scan_phase(
-            effective_db, scan_id, "resolve", "running",
-            {"queued": len(discovered_hosts)},
-        )
-
-        resolve_results: dict[str, ResolveResult] = {}
-        if discovered_hosts:
-            resolve_results = await resolve_batch(list(discovered_hosts), concurrency=50)
-
-        alive_hosts = {h: r for h, r in resolve_results.items() if r.alive}
-        bound_log.info("resolve_done", total=len(resolve_results), alive=len(alive_hosts))
-
-        if not alive_hosts:
-            bound_log.warning("zero_alive_hosts", hint="Check DNS / scope config")
-
-        await _update_scan_phase(
-            effective_db, scan_id, "resolve", "completed",
-            {"total": len(resolve_results), "alive": len(alive_hosts)},
-        )
+            await _update_scan_phase(
+                effective_db, scan_id, "resolve", "completed",
+                {"total": len(resolve_results), "alive": len(alive_hosts)},
+            )
+        else:
+            # IP-only scan: enumerate and resolve phases are not relevant.
+            bound_log.info("skip_domain_phases", reason="no domain targets in scope")
 
         # ── Phase 3: Port scan (intensity != gentle) ──────────────────────────
         open_ports_by_ip: dict[str, list[OpenPort]] = {}

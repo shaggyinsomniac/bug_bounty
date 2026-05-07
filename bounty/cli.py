@@ -21,7 +21,7 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import typer
 
@@ -46,12 +46,15 @@ log = get_logger(__name__)
 
 _INTENSITY_CHOICES = ("gentle", "normal", "aggressive")
 
+# Asset types accepted by scan-ips (narrowed Literal for mypy)
+_IpAssetType = Literal["ip", "cidr", "asn"]
+
 
 def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _detect_asset_type(value: str) -> tuple[str, str] | None:
+def _detect_asset_type(value: str) -> tuple[_IpAssetType, str] | None:
     """Auto-detect asset_type from a raw line value.
 
     Returns (asset_type, normalised_value) or None if unrecognised.
@@ -135,16 +138,16 @@ async def _smoke_recon_async(
         )
         scan_row: sqlite3.Row | None = await cursor.fetchone()
 
-        cursor = await conn.execute(
-            """
-            SELECT host, http_status, title, server, url
-            FROM assets
-            WHERE program_id=?
-            ORDER BY http_status ASC, host ASC
-            """,
-            (program_id,),
-        )
-        asset_rows: list[sqlite3.Row] = list(await cursor.fetchall())
+        # BUG 3 FIX: Query ONLY the assets found in this scan run, not all program assets.
+        asset_ids = result.get("assets", [])
+        asset_rows: list[sqlite3.Row] = []
+        if asset_ids:
+            placeholders = ",".join("?" * len(asset_ids))
+            cursor = await conn.execute(
+                f"SELECT host, http_status, title, server, url FROM assets WHERE id IN ({placeholders}) ORDER BY http_status ASC, host ASC",
+                asset_ids,
+            )
+            asset_rows = list(await cursor.fetchall())
 
         cursor = await conn.execute(
             "SELECT phase, status FROM scan_phases WHERE scan_id=? ORDER BY phase",
@@ -511,15 +514,17 @@ def leads_promote_cmd(
             ip_val: str = lead_row["ip"]
             port_val: int | None = lead_row["port"]
             scheme = "https" if port_val == 443 else "http"
-            if port_val and port_val not in (80, 443):
-                url = f"{scheme}://{ip_val}:{port_val}"
+            canonical_port: int | None = port_val if port_val not in (80, 443, None) else None
+            if canonical_port is not None:
+                url = f"{scheme}://{ip_val}:{canonical_port}"
             else:
                 url = f"{scheme}://{ip_val}"
 
-            # Check if asset already exists for this URL
+            # BUG 2 FIX: Lookup by (program_id, host, canonical_port), not by url.
+            # Use COALESCE(-1) trick so NULL compares equal to NULL.
             cursor = await conn.execute(
-                "SELECT id FROM assets WHERE program_id=? AND url=?",
-                (effective_pid, url),
+                "SELECT id FROM assets WHERE program_id=? AND host=? AND COALESCE(port,-1)=COALESCE(?,-1)",
+                (effective_pid, ip_val, canonical_port),
             )
             existing_asset = await cursor.fetchone()
 
@@ -532,13 +537,16 @@ def leads_promote_cmd(
                     """
                     INSERT INTO assets
                         (id, program_id, host, port, scheme, url, ip, status,
+                         seen_protocols, primary_scheme,
                          tags, first_seen, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'discovered', '["lead"]', ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'discovered', ?, ?, '["lead"]', ?, ?, ?)
                     """,
                     (
                         asset_id, effective_pid, ip_val,
-                        port_val if port_val not in (80, 443, None) else None,
+                        canonical_port,
                         scheme, url, ip_val,
+                        json.dumps([scheme]),  # seen_protocols
+                        scheme,                # primary_scheme
                         ts, ts, ts,
                     ),
                 )
@@ -643,11 +651,18 @@ async def _scan_ips_async(
         )
         scan_row: sqlite3.Row | None = await cursor.fetchone()
 
-        cursor = await conn.execute(
-            "SELECT host, http_status, title FROM assets WHERE program_id=? ORDER BY host",
-            (program_id,),
-        )
-        asset_rows: list[sqlite3.Row] = list(await cursor.fetchall())
+        # BUG 3 FIX: use the asset IDs returned by the pipeline, NOT a re-query of
+        # all program assets (which would include pre-existing rows from prior scans
+        # and cause both count mismatch and cross-scan contamination in the display).
+        asset_ids = result.get("assets", [])
+        asset_rows: list[sqlite3.Row] = []
+        if asset_ids:
+            placeholders = ",".join("?" * len(asset_ids))
+            cursor = await conn.execute(
+                f"SELECT host, http_status, title FROM assets WHERE id IN ({placeholders}) ORDER BY host",
+                asset_ids,
+            )
+            asset_rows = list(await cursor.fetchall())
 
         cursor = await conn.execute(
             "SELECT phase, status FROM scan_phases WHERE scan_id=? ORDER BY phase",
@@ -698,14 +713,14 @@ def scan_ips_cmd(
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
-            result = _detect_asset_type(line)
-            if result is None:
+            parsed = _detect_asset_type(line)
+            if parsed is None:
                 typer.echo(
                     f"[warn] line {lineno}: cannot parse {line!r} as IP/CIDR/ASN — skipping",
                     err=True,
                 )
                 continue
-            asset_type, value = result
+            asset_type, value = parsed
             targets.append(
                 Target(
                     program_id=program,
@@ -758,6 +773,197 @@ def scan_ips_cmd(
     typer.echo("=" * 60)
 
 
+# ---------------------------------------------------------------------------
+# wipe-program
+# ---------------------------------------------------------------------------
+
+@app.command("wipe-program")
+def wipe_program_cmd(
+    program_id: Annotated[str, typer.Argument(help="Program ID to wipe")],
+    confirm: Annotated[bool, typer.Option("--confirm", help="Actually delete (dry-run without this flag)")] = False,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Delete all data for a program (assets, scans, findings, leads, targets).
+
+    Without --confirm, prints a summary of what would be deleted and exits.
+    With --confirm, permanently deletes the data.  CASCADE handles child rows.
+    """
+    settings = get_settings()
+    db_path = db or settings.db_path
+    init_db(db_path)
+    apply_migrations(db_path)
+
+    async def _count_and_wipe(dry_run: bool) -> dict[str, int]:
+        async with get_conn(db_path) as conn:
+            counts: dict[str, int] = {}
+            for table in ("assets", "scans", "findings", "leads", "targets"):
+                col = "program_id"
+                cur = await conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {col}=?", (program_id,)
+                )
+                row = await cur.fetchone()
+                counts[table] = row[0] if row else 0
+
+            if not dry_run:
+                # Delete in dependency order; CASCADE handles child rows.
+                for table in ("leads", "findings", "scans"):
+                    await conn.execute(f"DELETE FROM {table} WHERE program_id=?", (program_id,))
+                # Deleting the program cascades to assets and targets.
+                await conn.execute("DELETE FROM programs WHERE id=?", (program_id,))
+                await conn.commit()
+        return counts
+
+    try:
+        counts = asyncio.run(_count_and_wipe(dry_run=not confirm))
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    total = sum(counts.values())
+    if not confirm:
+        typer.echo(f"[bounty wipe-program] DRY RUN — would delete from program {program_id!r}:")
+        for table, n in counts.items():
+            typer.echo(f"  {table}: {n} row(s)")
+        typer.echo(f"  total:  {total} row(s)")
+        typer.echo("\nRe-run with --confirm to actually delete.")
+        return
+
+    if total == 0:
+        typer.echo(f"[bounty wipe-program] Nothing found for program {program_id!r}.")
+        return
+
+    typer.echo(f"[bounty wipe-program] Deleted program {program_id!r}:")
+    for table, n in counts.items():
+        typer.echo(f"  {table}: {n} row(s) deleted")
+
+
+# ---------------------------------------------------------------------------
+# wipe-test-data
+# ---------------------------------------------------------------------------
+
+@app.command("wipe-test-data")
+def wipe_test_data_cmd(
+    confirm: Annotated[bool, typer.Option("--confirm", help="Actually delete (dry-run without this flag)")] = False,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Delete all programs matching test-* or manual:* patterns and their data.
+
+    Without --confirm, prints what would be deleted.  Use --confirm to execute.
+    """
+    settings = get_settings()
+    db_path = db or settings.db_path
+    init_db(db_path)
+    apply_migrations(db_path)
+
+    async def _find_and_wipe(dry_run: bool) -> list[str]:
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                "SELECT id FROM programs WHERE id LIKE 'test-%' OR id LIKE 'manual:%'"
+            )
+            rows = await cur.fetchall()
+            pids = [row["id"] for row in rows]
+
+            if not dry_run:
+                for pid in pids:
+                    for table in ("leads", "findings", "scans"):
+                        await conn.execute(f"DELETE FROM {table} WHERE program_id=?", (pid,))
+                    await conn.execute("DELETE FROM programs WHERE id=?", (pid,))
+                await conn.commit()
+        return pids
+
+    try:
+        pids = asyncio.run(_find_and_wipe(dry_run=not confirm))
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not pids:
+        typer.echo("[bounty wipe-test-data] No test/manual programs found.")
+        return
+
+    if not confirm:
+        typer.echo(f"[bounty wipe-test-data] DRY RUN — would delete {len(pids)} program(s):")
+        for pid in pids:
+            typer.echo(f"  {pid}")
+        typer.echo("\nRe-run with --confirm to actually delete.")
+        return
+
+    typer.echo(f"[bounty wipe-test-data] Deleted {len(pids)} program(s):")
+    for pid in pids:
+        typer.echo(f"  {pid}")
+
+
+# ---------------------------------------------------------------------------
+# cleanup-orphan-assets
+# ---------------------------------------------------------------------------
+
+@app.command("cleanup-orphan-assets")
+def cleanup_orphan_assets_cmd(
+    confirm: Annotated[bool, typer.Option("--confirm", help="Actually delete (dry-run without this flag)")] = False,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Delete assets whose program_id has no matching row in programs.
+
+    This removes historical contamination from prior buggy runs where assets
+    were written under a program_id that no longer exists or was never created.
+    Without --confirm, prints the count and sample assets that would be removed.
+    """
+    settings = get_settings()
+    db_path = db or settings.db_path
+    init_db(db_path)
+    apply_migrations(db_path)
+
+    async def _find_and_wipe(dry_run: bool) -> list[sqlite3.Row]:
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                """
+                SELECT id, program_id, host, url
+                FROM assets
+                WHERE program_id NOT IN (SELECT id FROM programs)
+                ORDER BY program_id, host
+                LIMIT 200
+                """
+            )
+            orphans = list(await cur.fetchall())
+            if not dry_run and orphans:
+                await conn.execute(
+                    "DELETE FROM assets WHERE program_id NOT IN (SELECT id FROM programs)"
+                )
+                await conn.commit()
+        return orphans
+
+    try:
+        orphans = asyncio.run(_find_and_wipe(dry_run=not confirm))
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not orphans:
+        typer.echo("[bounty cleanup-orphan-assets] No orphan assets found.")
+        return
+
+    verb = "Would delete" if not confirm else "Deleted"
+    typer.echo(f"[bounty cleanup-orphan-assets] {verb} {len(orphans)} orphan asset(s):")
+    for row in orphans[:20]:
+        typer.echo(f"  program={row['program_id']!r:30s}  host={row['host']}")
+    if len(orphans) > 20:
+        typer.echo(f"  … and {len(orphans) - 20} more")
+
+    if not confirm:
+        typer.echo("\nRe-run with --confirm to actually delete.")
+
+
 if __name__ == "__main__":
     app()
+
+
+
+
+
+
+
+
+
+
+
 
