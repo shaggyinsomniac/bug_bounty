@@ -36,23 +36,27 @@ log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Module-level semaphore registry — one entry per (scheme, host, port) key.
 # Lock access to the registry itself with a plain asyncio.Lock.
+# Both are created lazily (on first use inside a running event loop) to avoid
+# Python 3.12+ RuntimeError when asyncio primitives are instantiated at
+# module import time before any event loop starts.
 # ---------------------------------------------------------------------------
 
-_sem_lock = asyncio.Lock()
+_sem_lock: asyncio.Lock | None = None
 _semaphores: dict[str, asyncio.Semaphore] = {}
 
-# Maximum body bytes captured in memory.
-_MAX_BODY = 2 * 1024 * 1024  # 2 MiB
+# Maximum body bytes captured in memory.  Controlled by settings.max_response_bytes.
+_MAX_BODY = 5_000_000  # default matches Settings.max_response_bytes
 
 # Maximum redirect hops before giving up.
 _MAX_REDIRECTS = 5
 
-# Default user-agent string.
-_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
-)
+
+def _get_sem_lock() -> asyncio.Lock:
+    """Return (or lazily create) the semaphore-registry lock."""
+    global _sem_lock
+    if _sem_lock is None:
+        _sem_lock = asyncio.Lock()
+    return _sem_lock
 
 
 def _host_key(url: str) -> str:
@@ -79,7 +83,7 @@ async def _get_semaphore(url: str) -> asyncio.Semaphore:
         The ``asyncio.Semaphore`` for this host.
     """
     key = _host_key(url)
-    async with _sem_lock:
+    async with _get_sem_lock():
         if key not in _semaphores:
             limit = get_settings().max_concurrent_per_target
             _semaphores[key] = asyncio.Semaphore(limit)
@@ -98,9 +102,10 @@ def _extract_tls(ssl_object: ssl.SSLObject | None) -> TLSInfo | None:
     if ssl_object is None:
         return None
     try:
-        cert: dict[str, object] = ssl_object.getpeercert() or {}
-        subject_dict = dict(x[0] for x in cert.get("subject", ()))  # type: ignore[arg-type]
-        issuer_dict = dict(x[0] for x in cert.get("issuer", ()))  # type: ignore[arg-type]
+        from typing import Any  # local to avoid polluting module namespace
+        cert: dict[str, Any] = ssl_object.getpeercert() or {}
+        subject_dict: dict[str, str] = dict(x[0] for x in cert.get("subject", ()))
+        issuer_dict: dict[str, str] = dict(x[0] for x in cert.get("issuer", ()))
 
         not_after = cert.get("notAfter")
 
@@ -108,8 +113,8 @@ def _extract_tls(ssl_object: ssl.SSLObject | None) -> TLSInfo | None:
         cipher_name = cipher_info[0] if cipher_info else None
 
         return TLSInfo(
-            issuer=issuer_dict.get("organizationName") or issuer_dict.get("commonName"),  # type: ignore[arg-type]
-            subject=subject_dict.get("commonName"),  # type: ignore[arg-type]
+            issuer=issuer_dict.get("organizationName") or issuer_dict.get("commonName"),
+            subject=subject_dict.get("commonName"),
             not_after=str(not_after) if not_after else None,
             protocol=ssl_object.version(),
             cipher=cipher_name,
@@ -167,8 +172,10 @@ async def probe(
     """
     settings = get_settings()
     effective_timeout = timeout if timeout is not None else settings.http_timeout
+    # Bug bounty programs accept browser-like UAs; identifiable scanner UAs
+    # get blocked by WAFs and reduce coverage.  Override via settings.user_agent.
     effective_headers = {
-        "User-Agent": _USER_AGENT,
+        "User-Agent": settings.user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
     }
@@ -188,73 +195,83 @@ async def probe(
                 http2=True,
                 headers=effective_headers,
             ) as client:
-                response = await client.get(url)
+                async with client.stream("GET", url) as response:
+                    # Bounded streaming read — caps memory use at
+                    # settings.max_response_bytes (default 5 MB).
+                    max_bytes = settings.max_response_bytes
+                    body_buf = bytearray()
+                    body_truncated = False
+                    async for chunk in response.aiter_bytes(chunk_size=65536):
+                        body_buf.extend(chunk)
+                        if len(body_buf) >= max_bytes:
+                            body_truncated = True
+                            break
+                    body = bytes(body_buf)
+                    body_text = body.decode("utf-8", errors="replace")
 
-                # Capture body up to 2 MiB.
-                body = response.content[:_MAX_BODY]
-                body_text = body.decode("utf-8", errors="replace")
+                    elapsed_ms = (time.monotonic() - t0) * 1000
 
-                elapsed_ms = (time.monotonic() - t0) * 1000
+                    # Build redirect chain from history.
+                    redirect_chain = [str(r.url) for r in response.history]
 
-                # Build redirect chain from history.
-                redirect_chain = [str(r.url) for r in response.history]
+                    # Try to get TLS info from the underlying transport.
+                    tls: TLSInfo | None = None
+                    try:
+                        stream = response.stream
+                        # httpx exposes ssl_object via the underlying transport
+                        transport = getattr(client, "_transport", None)
+                        ssl_object: ssl.SSLObject | None = None
+                        if transport is not None:
+                            conn = getattr(transport, "_pool", None)
+                            if conn is not None:
+                                # Attempt to reach the SSL socket — best effort.
+                                for connection in getattr(conn, "_connections", []):
+                                    sock = getattr(connection, "_ssl_object", None)
+                                    if sock is not None:
+                                        ssl_object = sock
+                                        break
+                        tls = _extract_tls(ssl_object)
+                    except Exception:  # noqa: BLE001
+                        pass
 
-                # Try to get TLS info from the underlying transport.
-                tls: TLSInfo | None = None
-                try:
-                    stream = response.stream
-                    # httpx exposes ssl_object via the underlying transport
-                    transport = getattr(client, "_transport", None)
-                    ssl_object: ssl.SSLObject | None = None
-                    if transport is not None:
-                        conn = getattr(transport, "_pool", None)
-                        if conn is not None:
-                            # Attempt to reach the SSL socket — best effort.
-                            for connection in getattr(conn, "_connections", []):
-                                sock = getattr(connection, "_ssl_object", None)
-                                if sock is not None:
-                                    ssl_object = sock
-                                    break
-                    tls = _extract_tls(ssl_object)
-                except Exception:  # noqa: BLE001
-                    pass
+                    # Attempt to resolve the IP from the transport.
+                    ip: str | None = None
+                    try:
+                        # httpx does not expose the remote IP directly; fall back
+                        # to the response extensions if available.
+                        network_stream = response.extensions.get("network_stream")
+                        if network_stream is not None:
+                            raw_addr = network_stream.get_extra_info("server_addr")
+                            if raw_addr:
+                                ip = raw_addr[0]
+                    except Exception:  # noqa: BLE001
+                        pass
 
-                # Attempt to resolve the IP from the transport.
-                ip: str | None = None
-                try:
-                    # httpx does not expose the remote IP directly; fall back
-                    # to the response extensions if available.
-                    network_stream = response.extensions.get("network_stream")
-                    if network_stream is not None:
-                        raw_addr = network_stream.get_extra_info("server_addr")
-                        if raw_addr:
-                            ip = raw_addr[0]
-                except Exception:  # noqa: BLE001
-                    pass
+                    # Normalise headers to a flat dict (last-wins for duplicates).
+                    flat_headers: dict[str, str] = dict(response.headers)
 
-                # Normalise headers to a flat dict (last-wins for duplicates).
-                flat_headers: dict[str, str] = dict(response.headers)
-
-                final_url = str(response.url)
-                log.debug(
-                    "probe_ok",
-                    url=url,
-                    final_url=final_url,
-                    status=response.status_code,
-                    elapsed_ms=round(elapsed_ms, 1),
-                )
-                return ProbeResult(
-                    url=url,
-                    final_url=final_url,
-                    status_code=response.status_code,
-                    headers=flat_headers,
-                    body=body,
-                    body_text=body_text,
-                    redirect_chain=redirect_chain,
-                    tls=tls,
-                    ip=ip,
-                    elapsed_ms=elapsed_ms,
-                )
+                    final_url = str(response.url)
+                    log.debug(
+                        "probe_ok",
+                        url=url,
+                        final_url=final_url,
+                        status=response.status_code,
+                        elapsed_ms=round(elapsed_ms, 1),
+                        body_truncated=body_truncated,
+                    )
+                    return ProbeResult(
+                        url=url,
+                        final_url=final_url,
+                        status_code=response.status_code,
+                        headers=flat_headers,
+                        body=body,
+                        body_text=body_text,
+                        redirect_chain=redirect_chain,
+                        tls=tls,
+                        ip=ip,
+                        elapsed_ms=elapsed_ms,
+                        body_truncated=body_truncated,
+                    )
 
         except httpx.TooManyRedirects as exc:
             elapsed_ms = (time.monotonic() - t0) * 1000

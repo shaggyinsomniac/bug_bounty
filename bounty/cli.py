@@ -1,5 +1,5 @@
 """
-bounty.cli — Command-line interface for the bug bounty automation system.
+bounty.cli -- Command-line interface for the bug bounty automation system.
 
 Commands:
   smoke-recon   End-to-end recon sanity check against a target domain.
@@ -22,9 +22,10 @@ Entrypoint is declared in pyproject.toml:
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -56,13 +57,70 @@ def init_db_cmd(
 ) -> None:
     """Initialise (or migrate) the SQLite database.
 
-    Safe to run multiple times — idempotent.
+    Safe to run multiple times -- idempotent.
     """
     settings = get_settings()
     db_path = db or settings.db_path
     init_db(db_path)
     apply_migrations(db_path)
     typer.echo(f"[bounty init-db] database ready at {db_path}")
+
+
+async def _smoke_recon_async(
+    db_path: Path,
+    program_id: str,
+    target: str,
+    scan_id: str,
+    targets: list[Target],
+    intensity: str,
+) -> tuple[dict[str, list[str]], sqlite3.Row | None, list[sqlite3.Row], list[sqlite3.Row]]:
+    """Async implementation of smoke-recon: setup → pipeline → DB query."""
+    # Upsert a program row for the target
+    async with get_conn(db_path) as conn:
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO programs (id, platform, handle, name)
+            VALUES (?, 'manual', ?, ?)
+            """,
+            (program_id, target, target),
+        )
+        await conn.commit()
+
+    # Run the recon pipeline
+    result = await recon_pipeline(
+        program_id=program_id,
+        targets=targets,
+        intensity=intensity,
+        db_path=db_path,
+        scan_id=scan_id,
+    )
+
+    # Query DB for results summary
+    async with get_conn(db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT status, started_at, finished_at, error FROM scans WHERE id=?",
+            (scan_id,),
+        )
+        scan_row: sqlite3.Row | None = await cursor.fetchone()
+
+        cursor = await conn.execute(
+            """
+            SELECT host, http_status, title, server, url
+            FROM assets
+            WHERE program_id=?
+            ORDER BY http_status ASC, host ASC
+            """,
+            (program_id,),
+        )
+        asset_rows: list[sqlite3.Row] = list(await cursor.fetchall())
+
+        cursor = await conn.execute(
+            "SELECT phase, status FROM scan_phases WHERE scan_id=? ORDER BY phase",
+            (scan_id,),
+        )
+        phase_rows: list[sqlite3.Row] = list(await cursor.fetchall())
+
+    return result, scan_row, asset_rows, phase_rows
 
 
 @app.command("smoke-recon")
@@ -109,23 +167,11 @@ def smoke_recon(
 
     typer.echo(f"[bounty smoke-recon] target={target}  intensity={intensity}  db={db_path}")
 
-    # Initialise DB (idempotent)
+    # Initialise DB (idempotent) -- sync, runs before event loop
     init_db(db_path)
     apply_migrations(db_path)
 
     program_id = f"manual:{target}"
-
-    # Upsert a program row for the target
-    with get_conn(db_path) as conn:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO programs (id, platform, handle, name)
-            VALUES (?, 'manual', ?, ?)
-            """,
-            (program_id, target, target),
-        )
-        conn.commit()
-
     scan_id = make_ulid()
 
     targets = [
@@ -147,42 +193,14 @@ def smoke_recon(
     typer.echo("[bounty smoke-recon] running pipeline…")
 
     try:
-        result = asyncio.run(
-            recon_pipeline(
-                program_id=program_id,
-                targets=targets,
-                intensity=intensity,
-                db_path=db_path,
-                scan_id=scan_id,
-            )
+        result, scan_row, asset_rows, phase_rows = asyncio.run(
+            _smoke_recon_async(db_path, program_id, target, scan_id, targets, intensity)
         )
     except Exception as exc:  # noqa: BLE001
         typer.echo(f"[bounty smoke-recon] pipeline error: {exc}", err=True)
         raise typer.Exit(1)
 
-    # ── Query DB for results ─────────────────────────────────────────────────
-    with get_conn(db_path) as conn:
-        scan_row = conn.execute(
-            "SELECT status, started_at, finished_at, error FROM scans WHERE id=?",
-            (scan_id,),
-        ).fetchone()
-
-        asset_rows = conn.execute(
-            """
-            SELECT host, http_status, title, server, url
-            FROM assets
-            WHERE program_id=?
-            ORDER BY http_status ASC, host ASC
-            """,
-            (program_id,),
-        ).fetchall()
-
-        phase_rows = conn.execute(
-            "SELECT phase, status FROM scan_phases WHERE scan_id=? ORDER BY phase",
-            (scan_id,),
-        ).fetchall()
-
-    # ── Print summary ────────────────────────────────────────────────────────
+    # -- Print summary --------------------------------------------------------
     typer.echo("")
     typer.echo("=" * 70)
     typer.echo(f"  SCAN SUMMARY  id={scan_id}")
@@ -215,10 +233,10 @@ def smoke_recon(
 
     typer.echo("=" * 70)
 
-    # ── Exit code ────────────────────────────────────────────────────────────
+    # -- Exit code ------------------------------------------------------------
     if not asset_rows:
         typer.echo(
-            "\n[bounce smoke-recon] FAIL — no assets persisted to DB.\n"
+            "\n[bounty smoke-recon] FAIL -- no assets persisted to DB.\n"
             "  Check logs for asset_upsert_failed or probe_failed events.\n",
             err=True,
         )
@@ -226,15 +244,13 @@ def smoke_recon(
 
     if scan_row and scan_row["status"] != "completed":
         typer.echo(
-            f"\n[bounty smoke-recon] WARN — scan status is '{scan_row['status']}' (expected 'completed').\n",
+            f"\n[bounty smoke-recon] WARN -- scan status is '{scan_row['status']}' (expected 'completed').\n",
             err=True,
         )
         raise typer.Exit(1)
 
-    typer.echo(f"\n[bounty smoke-recon] OK — {len(asset_rows)} asset(s) persisted, scan completed.\n")
+    typer.echo(f"\n[bounty smoke-recon] OK -- {len(asset_rows)} asset(s) persisted, scan completed.\n")
 
 
 if __name__ == "__main__":
     app()
-
-

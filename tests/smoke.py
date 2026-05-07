@@ -30,7 +30,8 @@ from bounty.recon.http_probe import probe
 # DB smoke
 # ---------------------------------------------------------------------------
 
-def test_init_db_creates_tables() -> None:
+@pytest.mark.asyncio
+async def test_init_db_creates_tables() -> None:
     """init_db() should create all expected tables in a fresh database."""
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "test.db"
@@ -51,10 +52,11 @@ def test_init_db_creates_tables() -> None:
             "audit_log",
         }
 
-        with get_conn(db_path) as conn:
-            rows = conn.execute(
+        async with get_conn(db_path) as conn:
+            cursor = await conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            )
+            rows = await cursor.fetchall()
             found = {row["name"] for row in rows}
 
         assert expected_tables.issubset(found), (
@@ -62,37 +64,41 @@ def test_init_db_creates_tables() -> None:
         )
 
 
-def test_init_db_idempotent() -> None:
+@pytest.mark.asyncio
+async def test_init_db_idempotent() -> None:
     """Calling init_db() twice must not raise or corrupt the schema."""
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "test.db"
         init_db(db_path)
         init_db(db_path)  # second call must not raise
 
-        with get_conn(db_path) as conn:
-            rows = conn.execute(
+        async with get_conn(db_path) as conn:
+            cursor = await conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            )
+            rows = await cursor.fetchall()
             assert len(rows) >= 12
 
 
-def test_get_conn_row_factory() -> None:
+@pytest.mark.asyncio
+async def test_get_conn_row_factory() -> None:
     """get_conn() should yield rows accessible by column name."""
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "test.db"
         init_db(db_path)
 
-        with get_conn(db_path) as conn:
-            conn.execute(
+        async with get_conn(db_path) as conn:
+            await conn.execute(
                 """
                 INSERT INTO programs (id, platform, handle, name)
                 VALUES ('test:prog', 'manual', 'prog', 'Test Program')
                 """
             )
-            conn.commit()
-            row = conn.execute(
+            await conn.commit()
+            cursor = await conn.execute(
                 "SELECT * FROM programs WHERE id = 'test:prog'"
-            ).fetchone()
+            )
+            row = await cursor.fetchone()
 
         assert row is not None
         assert row["id"] == "test:prog"

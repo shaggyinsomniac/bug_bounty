@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     max_concurrent_per_target: int = 10
     """Maximum number of concurrent in-flight requests against a single target."""
 
+    # Bug bounty programs accept browser-like UAs; identifiable scanner UAs get
+    # blocked by WAFs and reduce coverage.  Override via USER_AGENT env var.
+    user_agent: str = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+    """User-Agent header sent with all HTTP probes."""
+
+    max_response_bytes: int = 5_000_000
+    """Maximum response body bytes kept in memory per probe (5 MB default)."""
+
     default_intensity: str = "normal"
     """Scan intensity level.  One of: ``light``, ``normal``, ``aggressive``."""
 

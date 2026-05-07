@@ -81,25 +81,25 @@ def _asset_url(scheme: str, host: str, port: int) -> str:
     return f"{scheme}://{host}:{port}"
 
 
-def _ensure_program_sync(db_path: Path, program_id: str) -> None:
+async def _ensure_program(db_path: Path, program_id: str) -> None:
     """INSERT OR IGNORE a placeholder program row so FK constraints pass.
 
     Args:
         db_path: Path to the SQLite database.
         program_id: Program ID to create if missing.
     """
-    with get_conn(db_path) as conn:
-        conn.execute(
+    async with get_conn(db_path) as conn:
+        await conn.execute(
             """
             INSERT OR IGNORE INTO programs (id, platform, handle, name)
             VALUES (?, 'manual', ?, '[manual]')
             """,
             (program_id, program_id),
         )
-        conn.commit()
+        await conn.commit()
 
 
-def _ensure_scan_sync(
+async def _ensure_scan(
     db_path: Path,
     scan_id: str,
     program_id: str,
@@ -114,8 +114,8 @@ def _ensure_scan_sync(
         intensity: Scan intensity label.
     """
     ts = _now_iso()
-    with get_conn(db_path) as conn:
-        conn.execute(
+    async with get_conn(db_path) as conn:
+        await conn.execute(
             """
             INSERT OR IGNORE INTO scans
                 (id, program_id, scan_type, status, intensity, triggered_by,
@@ -124,10 +124,10 @@ def _ensure_scan_sync(
             """,
             (scan_id, program_id, intensity, ts, ts),
         )
-        conn.commit()
+        await conn.commit()
 
 
-def _finish_scan_sync(db_path: Path, scan_id: str, status: str, error: str | None = None) -> None:
+async def _finish_scan(db_path: Path, scan_id: str, status: str, error: str | None = None) -> None:
     """UPDATE scans SET status and finished_at for the given scan.
 
     Args:
@@ -136,15 +136,15 @@ def _finish_scan_sync(db_path: Path, scan_id: str, status: str, error: str | Non
         status: Final status — ``"completed"`` or ``"failed"``.
         error: Error message if status is ``"failed"``.
     """
-    with get_conn(db_path) as conn:
-        conn.execute(
+    async with get_conn(db_path) as conn:
+        await conn.execute(
             """
             UPDATE scans SET status=?, finished_at=?, error=?
             WHERE id=?
             """,
             (status, _now_iso(), error, scan_id),
         )
-        conn.commit()
+        await conn.commit()
 
 
 async def _upsert_asset(
@@ -178,45 +178,44 @@ async def _upsert_asset(
     """
     url = _asset_url(scheme, host, port)
     try:
-        def _db_op() -> str | None:
-            with get_conn(db_path) as conn:
-                existing = conn.execute(
-                    "SELECT id FROM assets WHERE program_id=? AND url=?",
-                    (program_id, url),
-                ).fetchone()
-                if existing:
-                    conn.execute(
-                        """
-                        UPDATE assets SET
-                            ip=COALESCE(?,ip), http_status=COALESCE(?,http_status),
-                            title=COALESCE(?,title), server=COALESCE(?,server),
-                            status='alive', last_seen=?, updated_at=?
-                        WHERE id=?
-                        """,
-                        (ip, http_status, title, server, _now_iso(), _now_iso(), existing["id"]),
-                    )
-                    conn.commit()
-                    return str(existing["id"])
-                new_id = make_ulid()
-                conn.execute(
+        async with get_conn(db_path) as conn:
+            cursor = await conn.execute(
+                "SELECT id FROM assets WHERE program_id=? AND url=?",
+                (program_id, url),
+            )
+            existing = await cursor.fetchone()
+            if existing:
+                await conn.execute(
                     """
-                    INSERT INTO assets
-                        (id, program_id, host, port, scheme, url, ip, status,
-                         http_status, title, server, tags, last_seen, first_seen,
-                         created_at, updated_at)
-                    VALUES (?,?,?,?,?,?,?,'alive',?,?,?,?,?,?,?,?)
+                    UPDATE assets SET
+                        ip=COALESCE(?,ip), http_status=COALESCE(?,http_status),
+                        title=COALESCE(?,title), server=COALESCE(?,server),
+                        status='alive', last_seen=?, updated_at=?
+                    WHERE id=?
                     """,
-                    (
-                        new_id,
-                        program_id, host, port if port not in (80, 443) else None,
-                        scheme, url, ip, http_status, title, server,
-                        json.dumps(tags), _now_iso(), _now_iso(),
-                        _now_iso(), _now_iso(),
-                    ),
+                    (ip, http_status, title, server, _now_iso(), _now_iso(), existing["id"]),
                 )
-                conn.commit()
-                return new_id
-        return await asyncio.to_thread(_db_op)
+                await conn.commit()
+                return str(existing["id"])
+            new_id = make_ulid()
+            await conn.execute(
+                """
+                INSERT INTO assets
+                    (id, program_id, host, port, scheme, url, ip, status,
+                     http_status, title, server, tags, last_seen, first_seen,
+                     created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,'alive',?,?,?,?,?,?,?,?)
+                """,
+                (
+                    new_id,
+                    program_id, host, port if port not in (80, 443) else None,
+                    scheme, url, ip, http_status, title, server,
+                    json.dumps(tags), _now_iso(), _now_iso(),
+                    _now_iso(), _now_iso(),
+                ),
+            )
+            await conn.commit()
+            return new_id
     except Exception as exc:  # noqa: BLE001
         log.error("asset_upsert_failed", url=url, error=str(exc), exc_info=True)
         return None
@@ -241,14 +240,15 @@ async def _update_scan_phase(
     detail_json = json.dumps(detail or {})
     ts = _now_iso()
 
-    def _op() -> None:
-        with get_conn(db_path) as conn:
-            existing = conn.execute(
+    try:
+        async with get_conn(db_path) as conn:
+            cursor = await conn.execute(
                 "SELECT id FROM scan_phases WHERE scan_id=? AND phase=?",
                 (scan_id, phase),
-            ).fetchone()
+            )
+            existing = await cursor.fetchone()
             if existing:
-                conn.execute(
+                await conn.execute(
                     """
                     UPDATE scan_phases SET status=?, detail=?,
                         finished_at=CASE WHEN ?!='running' THEN ? ELSE finished_at END
@@ -257,17 +257,14 @@ async def _update_scan_phase(
                     (status, detail_json, status, ts, existing["id"]),
                 )
             else:
-                conn.execute(
+                await conn.execute(
                     """
                     INSERT INTO scan_phases (scan_id, phase, status, started_at, detail)
                     VALUES (?,?,?,?,?)
                     """,
                     (scan_id, phase, status, ts, detail_json),
                 )
-            conn.commit()
-
-    try:
-        await asyncio.to_thread(_op)
+            await conn.commit()
     except Exception as exc:  # noqa: BLE001
         log.warning("scan_phase_update_failed", scan_id=scan_id, phase=phase, error=str(exc))
 
@@ -336,8 +333,8 @@ async def recon_pipeline(
     bound_log.info("recon_pipeline_start", targets=len(targets))
 
     # ── Pre-flight: ensure program + scan rows exist in DB ────────────────────
-    await asyncio.to_thread(_ensure_program_sync, effective_db, program_id)
-    await asyncio.to_thread(_ensure_scan_sync, effective_db, scan_id, program_id, intensity)
+    await _ensure_program(effective_db, program_id)
+    await _ensure_scan(effective_db, scan_id, program_id, intensity)
 
     discovered_hosts: set[str] = set()
     asset_ids: list[str] = []
@@ -514,9 +511,7 @@ async def recon_pipeline(
     finally:
         # Always update scan status so the row reflects final state
         final_status = "failed" if pipeline_error else "completed"
-        await asyncio.to_thread(
-            _finish_scan_sync, effective_db, scan_id, final_status, pipeline_error
-        )
+        await _finish_scan(effective_db, scan_id, final_status, pipeline_error)
 
     bound_log.info(
         "recon_pipeline_done",

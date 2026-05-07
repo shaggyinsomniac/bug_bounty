@@ -4,9 +4,11 @@ bounty.db — SQLite schema, migrations, and connection management.
 Design decisions:
 - Raw SQL only (no ORM) for transparency and minimal dependencies.
 - WAL journal mode for concurrent read/write from the UI and background workers.
-- ``get_conn()`` is an async context manager that yields a synchronous
-  ``sqlite3.Connection``; all DB calls are wrapped with
-  ``asyncio.to_thread()`` at the call site to avoid blocking the event loop.
+- ``get_conn()`` is an ``@asynccontextmanager`` that yields an
+  ``aiosqlite.Connection``; all DB calls are awaited directly without any
+  ``asyncio.to_thread()`` wrappers.
+- ``init_db()`` and ``apply_migrations()`` remain synchronous — they run once
+  at startup before the event loop starts and use the raw ``sqlite3`` module.
 - Migrations are forward-only, keyed by an integer version stored in
   ``PRAGMA user_version``.  Run ``apply_migrations()`` on startup.
 - Foreign keys are enabled per-connection.
@@ -29,9 +31,11 @@ Schema overview:
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Generator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+
+import aiosqlite
 
 from bounty import get_logger
 
@@ -575,40 +579,42 @@ def _recreate_indexes(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-@contextmanager
-def get_conn(db_path: Path) -> Generator[sqlite3.Connection, None, None]:
-    """Context manager that yields a configured ``sqlite3.Connection``.
+@asynccontextmanager
+async def get_conn(db_path: Path) -> AsyncIterator[aiosqlite.Connection]:
+    """Async context manager that yields a configured ``aiosqlite.Connection``.
 
     The connection enables row factory (``sqlite3.Row``) so columns can be
-    accessed by name.  Foreign keys are enforced.  The caller is responsible
-    for committing; the context manager rolls back on exception.
+    accessed by name.  Foreign keys are enforced and WAL mode is active.
+    The caller is responsible for committing; the context manager rolls back
+    on exception and always closes the connection on exit.
 
     Usage::
 
         from bounty.db import get_conn
         from bounty.config import get_settings
 
-        with get_conn(get_settings().db_path) as conn:
-            row = conn.execute("SELECT * FROM programs WHERE id = ?", (pid,)).fetchone()
+        async with get_conn(get_settings().db_path) as conn:
+            cursor = await conn.execute("SELECT * FROM programs WHERE id = ?", (pid,))
+            row = await cursor.fetchone()
 
     Args:
         db_path: Path to the SQLite database file.
 
     Yields:
-        An open ``sqlite3.Connection``.
+        An open ``aiosqlite.Connection``.
 
     Raises:
-        sqlite3.Error: On any database error (after rollback).
+        aiosqlite.Error: On any database error (after rollback).
     """
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn = await aiosqlite.connect(str(db_path))
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
     try:
+        await conn.execute("PRAGMA foreign_keys = ON")
+        await conn.execute("PRAGMA journal_mode = WAL")
         yield conn
     except Exception:
-        conn.rollback()
+        await conn.rollback()
         raise
     finally:
-        conn.close()
+        await conn.close()
 

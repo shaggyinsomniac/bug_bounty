@@ -121,7 +121,7 @@ class Target(_Base):
 class Asset(_Base):
     """A discovered live host / URL."""
 
-    id: int | None = None
+    id: str | None = None
     program_id: str
     host: str
     port: int | None = None
@@ -172,7 +172,7 @@ class FingerprintResult(_Base):
 
     # Set after DB insert
     id: int | None = None
-    asset_id: int | None = None
+    asset_id: str | None = None
     created_at: datetime | None = None
 
 
@@ -218,6 +218,9 @@ class ProbeResult(_Base):
     error: str | None = None
     """Non-None means the probe failed; other fields may be partial."""
 
+    body_truncated: bool = False
+    """True when the response body was capped at ``max_response_bytes`` bytes."""
+
     @property
     def ok(self) -> bool:
         """True if the probe succeeded without errors."""
@@ -241,9 +244,9 @@ class ProbeResult(_Base):
 class Scan(_Base):
     """A scan job persisted in the database."""
 
-    id: int | None = None
+    id: str | None = None
     program_id: str | None = None
-    asset_id: int | None = None
+    asset_id: str | None = None
     scan_type: ScanType = "full"
     status: ScanStatus = "queued"
     intensity: Intensity = "normal"
@@ -260,7 +263,7 @@ class ScanRequest(_Base):
     """Inbound request to start a scan from the UI or CLI."""
 
     program_id: str | None = None
-    asset_id: int | None = None
+    asset_id: str | None = None
     scan_type: ScanType = "full"
     intensity: Intensity = "normal"
     triggered_by: str = "ui"
@@ -275,8 +278,8 @@ class Finding(_Base):
 
     id: int | None = None
     program_id: str | None = None
-    asset_id: int | None = None
-    scan_id: int | None = None
+    asset_id: str | None = None
+    scan_id: str | None = None
     dedup_key: str
     title: str
     category: str
@@ -310,8 +313,8 @@ class FindingDraft(_Base):
     """Pre-insert finding payload returned by Detection.run()."""
 
     program_id: str | None = None
-    asset_id: int | None = None
-    scan_id: int | None = None
+    asset_id: str | None = None
+    scan_id: str | None = None
     dedup_key: str
     title: str
     category: str
@@ -390,7 +393,7 @@ class SecretValidation(_Base):
     """Database row for a secrets_validations record."""
 
     id: int | None = None
-    asset_id: int | None = None
+    asset_id: str | None = None
     finding_id: int | None = None
     provider: str
     secret_hash: str

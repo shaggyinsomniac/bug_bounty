@@ -521,12 +521,12 @@ async def test_recon_pipeline_mini() -> None:
 
         # Insert a placeholder program
         from bounty.db import get_conn
-        with get_conn(db_path) as conn:
-            conn.execute(
+        async with get_conn(db_path) as conn:
+            await conn.execute(
                 "INSERT INTO programs (id, platform, handle, name) VALUES (?,?,?,?)",
                 ("test:pipeline", "manual", "pipeline", "Pipeline Test"),
             )
-            conn.commit()
+            await conn.commit()
 
         scan_id = make_ulid()
 
@@ -555,21 +555,23 @@ async def test_recon_pipeline_mini() -> None:
 
         # ── Assert DB state (this is the critical check) ──────────────────────
         from bounty.db import get_conn
-        with get_conn(db_path) as conn:
+        async with get_conn(db_path) as conn:
             # 1. Assets table must have rows
-            asset_count = conn.execute(
+            cursor = await conn.execute(
                 "SELECT COUNT(*) FROM assets WHERE program_id='test:pipeline'"
-            ).fetchone()[0]
+            )
+            asset_count = (await cursor.fetchone())[0]
             assert asset_count >= 1, (
                 f"Expected >=1 assets in DB for test:pipeline, got {asset_count}. "
                 "Silent persistence bug detected — check asset_upsert_failed logs."
             )
 
             # 2. Scan row must exist with status='completed'
-            scan_row = conn.execute(
+            cursor = await conn.execute(
                 "SELECT status, finished_at FROM scans WHERE id=?",
                 (scan_id,),
-            ).fetchone()
+            )
+            scan_row = await cursor.fetchone()
             assert scan_row is not None, (
                 f"Scan row not found in DB for id={scan_id}. "
                 "Pipeline must create the scan row before writing phases."
@@ -583,10 +585,11 @@ async def test_recon_pipeline_mini() -> None:
             )
 
             # 3. scan_phases rows must exist with status='completed'
-            phase_rows = conn.execute(
+            cursor = await conn.execute(
                 "SELECT phase, status FROM scan_phases WHERE scan_id=?",
                 (scan_id,),
-            ).fetchall()
+            )
+            phase_rows = await cursor.fetchall()
             assert len(phase_rows) >= 1, (
                 f"Expected >=1 scan_phases rows for scan_id={scan_id}, got 0. "
                 "FK violation likely — scan row must be created before phase writes."
@@ -601,12 +604,11 @@ async def test_recon_pipeline_mini() -> None:
             )
 
             # 4. Asset IDs in return value must match what's in the DB
-            db_ids = {
-                row["id"]
-                for row in conn.execute(
-                    "SELECT id FROM assets WHERE program_id='test:pipeline'"
-                ).fetchall()
-            }
+            cursor = await conn.execute(
+                "SELECT id FROM assets WHERE program_id='test:pipeline'"
+            )
+            db_id_rows = await cursor.fetchall()
+            db_ids = {row["id"] for row in db_id_rows}
             for aid in result["assets"]:
                 assert aid in db_ids, (
                     f"Asset ID {aid!r} from pipeline return value not found in DB. "

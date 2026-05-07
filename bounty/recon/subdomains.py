@@ -1,9 +1,10 @@
 """
-bounty.recon.subdomains — Async subdomain enumeration via subfinder + crt.sh.
+bounty.recon.subdomains — Async subdomain enumeration via subfinder + crt.sh + certspotter.
 
-Two sources run in parallel:
-  1. subfinder — runs as a subprocess, streams results line-by-line
-  2. crt.sh    — queries certificate transparency logs via HTTPS, free, no auth
+Three sources run in parallel:
+  1. subfinder     — runs as a subprocess, streams results line-by-line
+  2. crt.sh        — certificate transparency search, free, no auth
+  3. certspotter   — another CT source (api.certspotter.com), free, no auth
 
 subfinder intensity mapping:
   gentle     — ``-passive`` flag (passive sources only, no active DNS)
@@ -13,10 +14,15 @@ subfinder intensity mapping:
 Timeouts:
   gentle / normal subfinder = 10 minutes
   aggressive subfinder      = 30 minutes
-  crt.sh per-domain         = 30 seconds
+  crt.sh / certspotter      = 30 seconds per domain
 
-On crt.sh failure / timeout: log warning, continue with subfinder-only results.
-If subfinder is missing: crt.sh results are still returned.
+Retry policy for crt.sh and certspotter:
+  3 attempts, exponential backoff (2s, 5s, 10s between attempts),
+  retry on 502/503/504 or timeout; return empty set after 3 failures.
+  404 is treated as "no certificates found" and short-circuits immediately.
+
+On any CT source failure / timeout: log warning, continue with other sources.
+If subfinder is missing: CT results are still returned.
 
 Deduplication:
   Known subdomains for the domain are loaded from the DB at the start of
@@ -44,7 +50,12 @@ log = get_logger(__name__)
 _GENTLE_TIMEOUT = 600       # 10 minutes
 _NORMAL_TIMEOUT = 600       # 10 minutes
 _AGGRESSIVE_TIMEOUT = 1800  # 30 minutes
-_CRTSH_TIMEOUT = 30.0       # crt.sh per-domain timeout in seconds
+_CRTSH_TIMEOUT = 30.0       # CT source per-domain timeout in seconds
+
+# Retry policy for CT sources (crt.sh, certspotter)
+_CT_MAX_RETRIES = 3
+_CT_BACKOFF = (2.0, 5.0, 10.0)  # seconds between retry attempts
+_CT_RETRY_STATUSES = {502, 503, 504}  # HTTP status codes that warrant a retry
 
 
 def _find_tool(name: str) -> str:
@@ -83,12 +94,10 @@ async def _crtsh_hostnames(domain: str) -> set[str]:
     """Fetch subdomains from crt.sh certificate transparency search.
 
     Queries ``https://crt.sh/?q=%25.{domain}&output=json`` and returns a
-    deduplicated set of lowercase FQDNs.  Each JSON entry has a
-    ``name_value`` field that may contain newline-separated names and
-    leading ``*.`` wildcards.
+    deduplicated set of lowercase FQDNs.
 
-    This function is called concurrently with subfinder so the HTTP round-trip
-    happens in parallel with subprocess I/O.
+    Retries up to ``_CT_MAX_RETRIES`` times on 5xx / timeout with exponential
+    backoff.  A 404 response short-circuits immediately with an empty result.
 
     Args:
         domain: Root domain to query, e.g. ``"example.com"``.
@@ -101,29 +110,125 @@ async def _crtsh_hostnames(domain: str) -> set[str]:
     bound_log = log.bind(domain=domain, source="crtsh")
     bound_log.debug("crtsh_start", url=url)
     found: set[str] = set()
-    try:
-        async with httpx.AsyncClient(timeout=_CRTSH_TIMEOUT, follow_redirects=True) as client:
-            resp = await client.get(url, headers={"Accept": "application/json"})
-            # crt.sh returns 404 when there are no matching certificates.
-            # Treat it as an empty result rather than an error.
-            if resp.status_code == 404:
-                bound_log.debug("crtsh_empty_result", domain=domain)
-                return found
-            resp.raise_for_status()
-            entries: list[dict[str, object]] = resp.json()
 
-        for entry in entries:
-            name_value = str(entry.get("name_value", ""))
-            for raw in name_value.splitlines():
-                hostname = raw.strip().lower().lstrip("*.").rstrip(".")
-                if hostname and "." in hostname and " " not in hostname:
-                    found.add(hostname)
+    for attempt in range(_CT_MAX_RETRIES):
+        try:
+            async with httpx.AsyncClient(timeout=_CRTSH_TIMEOUT, follow_redirects=True) as client:
+                resp = await client.get(url, headers={"Accept": "application/json"})
+                # 404 = no matching certificates; not an error, no retry needed.
+                if resp.status_code == 404:
+                    bound_log.debug("crtsh_empty_result", domain=domain)
+                    return found
+                if resp.status_code in _CT_RETRY_STATUSES:
+                    raise httpx.HTTPStatusError(
+                        f"HTTP {resp.status_code}", request=resp.request, response=resp
+                    )
+                resp.raise_for_status()
+                entries: list[dict[str, object]] = resp.json()
 
-        bound_log.info("crtsh_done", found=len(found))
-    except httpx.TimeoutException:
-        bound_log.warning("crtsh_timeout", timeout_s=_CRTSH_TIMEOUT)
-    except Exception as exc:  # noqa: BLE001
-        bound_log.warning("crtsh_failed", error=str(exc))
+            for entry in entries:
+                name_value = str(entry.get("name_value", ""))
+                for raw in name_value.splitlines():
+                    hostname = raw.strip().lower().lstrip("*.").rstrip(".")
+                    if hostname and "." in hostname and " " not in hostname:
+                        found.add(hostname)
+
+            bound_log.info("crtsh_done", found=len(found))
+            return found
+
+        except httpx.TimeoutException:
+            if attempt < _CT_MAX_RETRIES - 1:
+                bound_log.debug("crtsh_timeout_retry", attempt=attempt + 1)
+                await asyncio.sleep(_CT_BACKOFF[attempt])
+            else:
+                bound_log.warning("crtsh_timeout_final", timeout_s=_CRTSH_TIMEOUT)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in _CT_RETRY_STATUSES and attempt < _CT_MAX_RETRIES - 1:
+                bound_log.debug(
+                    "crtsh_server_error_retry",
+                    status=exc.response.status_code,
+                    attempt=attempt + 1,
+                )
+                await asyncio.sleep(_CT_BACKOFF[attempt])
+            else:
+                bound_log.warning("crtsh_failed", error=str(exc))
+                break
+        except Exception as exc:  # noqa: BLE001
+            bound_log.warning("crtsh_failed", error=str(exc))
+            break
+
+    return found
+
+
+async def _certspotter_hostnames(domain: str) -> set[str]:
+    """Fetch subdomains from the certspotter.com certificate transparency API.
+
+    Queries the free tier of ``https://api.certspotter.com/v1/issuances``.
+    No authentication required for low-volume queries (rate limit: 100 req/h).
+
+    Applies the same retry policy as ``_crtsh_hostnames``.
+
+    Args:
+        domain: Root domain to query, e.g. ``"example.com"``.
+
+    Returns:
+        Set of discovered hostnames (lowercased, wildcards stripped).
+        Returns an empty set on any error.
+    """
+    url = (
+        f"https://api.certspotter.com/v1/issuances"
+        f"?domain={domain}&include_subdomains=true&expand=dns_names"
+    )
+    bound_log = log.bind(domain=domain, source="certspotter")
+    bound_log.debug("certspotter_start", url=url)
+    found: set[str] = set()
+
+    for attempt in range(_CT_MAX_RETRIES):
+        try:
+            async with httpx.AsyncClient(timeout=_CRTSH_TIMEOUT, follow_redirects=True) as client:
+                resp = await client.get(url, headers={"Accept": "application/json"})
+                if resp.status_code == 404:
+                    return found
+                if resp.status_code in _CT_RETRY_STATUSES:
+                    raise httpx.HTTPStatusError(
+                        f"HTTP {resp.status_code}", request=resp.request, response=resp
+                    )
+                resp.raise_for_status()
+                entries: list[dict[str, object]] = resp.json()
+
+            for entry in entries:
+                dns_names = entry.get("dns_names", [])
+                if not isinstance(dns_names, list):
+                    continue
+                for raw in dns_names:
+                    hostname = str(raw).strip().lower().lstrip("*.").rstrip(".")
+                    if hostname and "." in hostname and " " not in hostname:
+                        found.add(hostname)
+
+            bound_log.info("certspotter_done", found=len(found))
+            return found
+
+        except httpx.TimeoutException:
+            if attempt < _CT_MAX_RETRIES - 1:
+                bound_log.debug("certspotter_timeout_retry", attempt=attempt + 1)
+                await asyncio.sleep(_CT_BACKOFF[attempt])
+            else:
+                bound_log.warning("certspotter_timeout_final", timeout_s=_CRTSH_TIMEOUT)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in _CT_RETRY_STATUSES and attempt < _CT_MAX_RETRIES - 1:
+                bound_log.debug(
+                    "certspotter_server_error_retry",
+                    status=exc.response.status_code,
+                    attempt=attempt + 1,
+                )
+                await asyncio.sleep(_CT_BACKOFF[attempt])
+            else:
+                bound_log.warning("certspotter_failed", error=str(exc))
+                break
+        except Exception as exc:  # noqa: BLE001
+            bound_log.warning("certspotter_failed", error=str(exc))
+            break
+
     return found
 
 
@@ -160,8 +265,9 @@ async def enumerate(
     """
     seen: set[str] = set(known_hosts or [])
 
-    # Start crt.sh concurrently — runs while subfinder is streaming
+    # Start crt.sh and certspotter concurrently — both run while subfinder streams
     crtsh_task: asyncio.Task[set[str]] = asyncio.create_task(_crtsh_hostnames(domain))
+    certspotter_task: asyncio.Task[set[str]] = asyncio.create_task(_certspotter_hostnames(domain))
 
     cmd: list[str] = []
     proc: asyncio.subprocess.Process | None = None
@@ -244,23 +350,45 @@ async def enumerate(
             except ProcessLookupError:
                 pass
 
-    # ── Yield crt.sh results (runs regardless of subfinder outcome) ──────────
-    crtsh_new = 0
+    # ── Yield crt.sh + certspotter results (run regardless of subfinder) ─────
+    ct_new = 0
     try:
-        crtsh_found = await asyncio.wait_for(crtsh_task, timeout=_CRTSH_TIMEOUT)
-        for hostname in sorted(crtsh_found):
+        crtsh_found, certspotter_found = await asyncio.gather(
+            asyncio.wait_for(crtsh_task, timeout=_CRTSH_TIMEOUT),
+            asyncio.wait_for(certspotter_task, timeout=_CRTSH_TIMEOUT),
+            return_exceptions=True,
+        )
+        # Merge results from both CT sources; treat exceptions as empty sets
+        ct_combined: set[str] = set()
+        if isinstance(crtsh_found, set):
+            ct_combined |= crtsh_found
+        else:
+            log.warning("crtsh_await_failed", domain=domain, error=str(crtsh_found))
+        if isinstance(certspotter_found, set):
+            ct_combined |= certspotter_found
+        else:
+            log.warning("certspotter_await_failed", domain=domain, error=str(certspotter_found))
+
+        for hostname in sorted(ct_combined):
             if hostname not in seen:
                 seen.add(hostname)
-                crtsh_new += 1
+                ct_new += 1
                 yield hostname
-        log.debug("crtsh_merged", domain=domain, new=crtsh_new, total_crtsh=len(crtsh_found))
+        log.debug(
+            "ct_sources_merged",
+            domain=domain,
+            new=ct_new,
+            crtsh=len(crtsh_found) if isinstance(crtsh_found, set) else 0,
+            certspotter=len(certspotter_found) if isinstance(certspotter_found, set) else 0,
+        )
     except TimeoutError:
-        log.warning("crtsh_await_timeout", domain=domain)
+        log.warning("ct_await_timeout", domain=domain)
         crtsh_task.cancel()
+        certspotter_task.cancel()
     except asyncio.CancelledError:
         pass
     except Exception as exc:  # noqa: BLE001
-        log.warning("crtsh_merge_failed", domain=domain, error=str(exc))
+        log.warning("ct_merge_failed", domain=domain, error=str(exc))
 
     # Propagate any subfinder error AFTER crt.sh results have been yielded
     if tool_error is not None:

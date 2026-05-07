@@ -55,8 +55,20 @@ class EventBus:
 
     def __init__(self) -> None:
         self._subscribers: list[asyncio.Queue[SSEEvent | None]] = []
-        self._lock = asyncio.Lock()
+        self._lock: asyncio.Lock | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+
+    @property
+    def _get_lock(self) -> asyncio.Lock:
+        """Return (or lazily create) the asyncio.Lock for this bus.
+
+        Created on first access inside a running event loop to avoid the
+        Python 3.12+ RuntimeError from instantiating asyncio primitives at
+        module import time (before any event loop exists).
+        """
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     def _get_loop(self) -> asyncio.AbstractEventLoop:
         """Return the running event loop, caching the first observed loop."""
@@ -74,7 +86,7 @@ class EventBus:
         Args:
             event: The ``SSEEvent`` to broadcast.
         """
-        async with self._lock:
+        async with self._get_lock:
             dead: list[asyncio.Queue[SSEEvent | None]] = []
             for q in self._subscribers:
                 if q.full():
@@ -110,7 +122,7 @@ class EventBus:
             return
 
         loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(self.publish(event))
+            lambda: asyncio.create_task(self.publish(event))
         )
 
     async def subscribe(
@@ -130,7 +142,7 @@ class EventBus:
             ``SSEEvent`` instances as they are published.
         """
         q: asyncio.Queue[SSEEvent | None] = asyncio.Queue(maxsize=_QUEUE_MAX)
-        async with self._lock:
+        async with self._get_lock:
             self._subscribers.append(q)
         log.debug("sse_subscriber_added", total=len(self._subscribers))
         try:
@@ -142,7 +154,7 @@ class EventBus:
                 if event_types is None or event.event_type in event_types:
                     yield event
         finally:
-            async with self._lock:
+            async with self._get_lock:
                 try:
                     self._subscribers.remove(q)
                 except ValueError:
@@ -151,7 +163,7 @@ class EventBus:
 
     async def shutdown(self) -> None:
         """Signal all subscribers to exit by pushing ``None`` sentinels."""
-        async with self._lock:
+        async with self._get_lock:
             for q in self._subscribers:
                 try:
                     q.put_nowait(None)

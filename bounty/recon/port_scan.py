@@ -194,7 +194,7 @@ async def scan_ports(
             stderr_text = stderr_raw.decode("utf-8", errors="replace")
 
             if proc.returncode != 0:
-                raise ToolFailedError("naabu", proc.returncode, stderr_text[:500])
+                raise ToolFailedError("naabu", proc.returncode or 1, stderr_text[:500])
 
             bound_log.info("naabu_done", open_ports=len(open_ports))
             return open_ports
