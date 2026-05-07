@@ -273,7 +273,9 @@ def smoke_recon(
         server_str = f"  server={server_val}" if server_val else ""
         cdn_str = f" cdn={cdn_val}" if cdn_val else ""
         waf_str = f" waf={waf_val}" if waf_val else ""
-        typer.echo(f"    [{status_str:3s}] {row['host']:<40s}  {title_str}{server_str}{cdn_str}{waf_str}")
+        # Use print() directly so Rich/typer markup processing never touches
+        # hostnames or URLs — prevents `[host](url)` auto-link rendering.
+        print(f"    [{status_str:>3s}] {row['host']:<40s}  {title_str}{server_str}{cdn_str}{waf_str}")
 
         fps: list[dict[str, object]] = fp_by_asset.get(str(row["id"]), [])
         if fps:
@@ -285,7 +287,7 @@ def smoke_recon(
                     seen_techs[t] = fp
             top_fps = sorted(seen_techs.values(), key=lambda x: -int(str(x["confidence"])))[:5]
             tech_strs = [f"{fp['tech']}({fp['category']},{fp['confidence']})" for fp in top_fps]
-            typer.echo(f"           techs: {',  '.join(tech_strs)}")
+            print(f"           techs: {',  '.join(tech_strs)}")
 
     if len(asset_rows) > 50:
         typer.echo(f"    … and {len(asset_rows) - 50} more")

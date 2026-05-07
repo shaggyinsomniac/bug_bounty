@@ -274,6 +274,41 @@ class TestParseBody:
     def test_empty_body(self) -> None:
         assert parse_body(b"", "text/html", "https://example.com") == []
 
+    # ── BUG 1 regression — Magento false positive on Drupal sites ─────────
+
+    def test_magento_fp_drupal_body_classes(self) -> None:
+        """Drupal body classes ('page-node', 'cms-front') must NOT trigger Magento."""
+        html = b'<html><body class="page-node cms-front layout-no-sidebars"><p>Drupal</p></body></html>'
+        rs = parse_body(html, "text/html", "https://example.com")
+        assert not any(r.tech == "magento" for r in rs), (
+            "Magento should NOT be detected from generic 'page-' / 'cms-' body classes"
+        )
+
+    def test_magento_tp_catalog_product_class(self) -> None:
+        """A real Magento body class ('catalog-product-view') MUST trigger Magento."""
+        html = b'<html><body class="catalog-product-view category-bag"><p>Magento</p></body></html>'
+        rs = parse_body(html, "text/html", "https://example.com")
+        assert any(r.tech == "magento" for r in rs), (
+            "Magento SHOULD be detected from 'catalog-product-view' body class"
+        )
+
+    # ── BUG 2 regression — Zendesk suppress Rails over-detection ──────────
+
+    def test_zendesk_detection_suppresses_rails_hotwire(self) -> None:
+        """When Zendesk is detected (zendesk.com script src), rails-hotwire
+        must NOT be emitted even if data-turbo is present."""
+        html = (
+            b'<html><head>'
+            b'<script src="https://static.zdassets.com/zendesk.com/assets/main.js"></script>'
+            b'</head><body data-turbo="true"><p>Help Center</p></body></html>'
+        )
+        rs = parse_body(html, "text/html", "https://docs.example.com")
+        techs = {r.tech for r in rs}
+        assert "zendesk" in techs, "Zendesk should be detected via zendesk.com script src"
+        assert "rails-hotwire" not in techs, (
+            "rails-hotwire must be suppressed when Zendesk is already detected"
+        )
+
 
 # ============================================================================
 # 4. parse_tls

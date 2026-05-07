@@ -200,6 +200,35 @@ def parse_body(body: bytes, content_type: str | None, url: str) -> list[Fingerpr
                 )
                 break
 
+    # ── Zendesk detection (runs BEFORE body-class / script signals) ────────
+    zendesk_detected = False
+    if soup is not None:
+        # Check script/link srcs for zendesk.com
+        for tag in soup.find_all(["script", "link"]):
+            for attr in ("src", "href"):
+                val = str(tag.get(attr, ""))
+                if "zendesk.com" in val:
+                    zendesk_detected = True
+                    break
+            if zendesk_detected:
+                break
+    # Also check raw text for meta generator or body class
+    if not zendesk_detected and (
+        'name="generator"' in text.lower() and "zendesk" in text.lower()
+    ):
+        zendesk_detected = True
+    if not zendesk_detected and "zd-zopim" in text:
+        zendesk_detected = True
+    if zendesk_detected:
+        results.append(
+            FingerprintResult(
+                tech="zendesk",
+                category="other",
+                confidence=95,
+                evidence="zendesk.com in script/link src, meta generator, or zd-zopim body class",
+            )
+        )
+
     # ── Body class attribute ────────────────────────────────────────────────
     if soup is not None:
         body_tag = soup.find("body")
@@ -219,12 +248,15 @@ def parse_body(body: bytes, content_type: str | None, url: str) -> list[Fingerpr
                         evidence=f"body.class: {cls[:200]}",
                     )
                 )
-            if any(x in cls for x in ("cms-page", "catalog-product", "catalog-category", "checkout-cart")):
+            # Require at least one genuinely Magento-specific class prefix.
+            # "cms-page" and "page-" are also emitted by Drupal/other CMSs,
+            # so they are intentionally excluded from this rule.
+            if any(x in cls for x in ("catalog-product", "catalog-category", "checkout-")):
                 results.append(
                     FingerprintResult(
                         tech="magento",
                         category="cms",
-                        confidence=70,
+                        confidence=60,
                         evidence=f"body.class: {cls[:200]}",
                     )
                 )
@@ -237,10 +269,15 @@ def parse_body(body: bytes, content_type: str | None, url: str) -> list[Fingerpr
         ("window.__REACT_DEVTOOLS", "react", "framework", 80),
         ("ng-app", "angularjs", "framework", 80),
         ("ng-controller", "angularjs", "framework", 80),
-        ("data-turbo", "rails-hotwire", "framework", 80),
-        ("action-cable-meta", "rails-hotwire", "framework", 80),
+        # Hotwire / ActionCable are Rails markers but also appear on Zendesk help-centres.
+        # Lower confidence (50) and suppress entirely when Zendesk already detected.
+        ("data-turbo", "rails-hotwire", "framework", 50),
+        ("action-cable-meta", "rails-hotwire", "framework", 50),
     ]
     for signal, tech, cat, conf in script_signals:
+        # Skip Rails-hotwire signals when we already know this is Zendesk.
+        if tech == "rails-hotwire" and zendesk_detected:
+            continue
         if signal in text:
             results.append(
                 FingerprintResult(

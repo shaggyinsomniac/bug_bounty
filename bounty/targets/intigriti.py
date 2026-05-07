@@ -231,7 +231,7 @@ def _parse_response(
                 Target(
                     program_id=program_id,
                     scope_type="in_scope",
-                    asset_type="wildcard" if entry.startswith("*.") else "url",  # type: ignore[arg-type]
+                    asset_type="wildcard" if entry.startswith("*.") else "url",
                     value=entry,
                 )
             )
@@ -247,7 +247,7 @@ def _parse_response(
                 Target(
                     program_id=program_id,
                     scope_type="out_of_scope",
-                    asset_type="url",  # type: ignore[arg-type]
+                    asset_type="url",
                     value=entry,
                 )
             )
