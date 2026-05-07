@@ -348,6 +348,7 @@ class TestResolveHelpers:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_resolve_batch_known_domain() -> None:
     """resolve_batch should return alive=True for one.one.one.one."""
     results = await resolve_batch(["one.one.one.one"], concurrency=5)
@@ -358,6 +359,7 @@ async def test_resolve_batch_known_domain() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_resolve_batch_nonexistent() -> None:
     """resolve_batch returns NXDOMAIN error for non-existent domains."""
     results = await resolve_batch(
@@ -430,6 +432,7 @@ async def test_subfinder_not_installed_raises_tool_missing() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_subfinder_live() -> None:
     """Real subfinder run — skipped if subfinder is not installed."""
     import shutil
@@ -497,6 +500,7 @@ class TestNaabuLineParser:
 # ============================================================================
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_recon_pipeline_mini() -> None:
     """Run the recon pipeline against a single known domain and verify DB state.
 

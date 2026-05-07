@@ -240,7 +240,7 @@ def smoke_recon(
         typer.echo(f"    {ph['phase']:15s}  {ph['status']}")
 
     typer.echo("")
-    typer.echo(f"  ASSETS DISCOVERED: {len(asset_rows)}")
+    typer.echo(f"  UNIQUE ASSETS DISCOVERED: {len(set(result.get('assets', [])))}")
 
     async def _get_fingerprints_for_assets(db_path: Path, asset_ids: list[str]) -> dict[str, list[dict[str, object]]]:
         result: dict[str, list[dict[str, object]]] = {}
@@ -264,6 +264,8 @@ def smoke_recon(
             _get_fingerprints_for_assets(db_path, [str(r["id"]) for r in asset_rows[:50]])
         )
 
+    _TIER_RANK = {"hint": 0, "weak": 1, "strong": 2, "definitive": 3}
+
     for row in asset_rows[:50]:
         status_str = str(row["http_status"]) if row["http_status"] else "---"
         title_str = (row["title"] or "")[:40]
@@ -279,14 +281,22 @@ def smoke_recon(
 
         fps: list[dict[str, object]] = fp_by_asset.get(str(row["id"]), [])
         if fps:
-            # Deduplicate by tech name (keep highest confidence)
+            # Deduplicate by tech name (keep highest-tier)
             seen_techs: dict[str, dict[str, object]] = {}
             for fp in fps:
                 t = str(fp["tech"])
-                if t not in seen_techs or int(str(fp["confidence"])) > int(str(seen_techs[t]["confidence"])):
+                fp_rank = _TIER_RANK.get(str(fp["confidence"]).lower(), 0)
+                cur_rank = _TIER_RANK.get(str(seen_techs.get(t, {}).get("confidence", "hint")).lower(), 0)
+                if t not in seen_techs or fp_rank > cur_rank:
                     seen_techs[t] = fp
-            top_fps = sorted(seen_techs.values(), key=lambda x: -int(str(x["confidence"])))[:5]
-            tech_strs = [f"{fp['tech']}({fp['category']},{fp['confidence']})" for fp in top_fps]
+            top_fps = sorted(
+                seen_techs.values(),
+                key=lambda x: -_TIER_RANK.get(str(x["confidence"]).lower(), 0),
+            )[:5]
+            tech_strs = [
+                f"{fp['tech']}({fp['category']},{str(fp['confidence']).upper()})"
+                for fp in top_fps
+            ]
             print(f"           techs: {',  '.join(tech_strs)}")
 
     if len(asset_rows) > 50:

@@ -142,8 +142,8 @@ _SCHEMA: list[str] = [
         version    TEXT,
         category   TEXT NOT NULL DEFAULT 'other',
         -- web-server | cms | framework | language | cdn | waf | other
-        evidence   TEXT NOT NULL DEFAULT '',  -- short human note on *how* detected
-        confidence INTEGER NOT NULL DEFAULT 50,  -- 0-100
+        evidence   TEXT NOT NULL DEFAULT '',  -- structured "source:key=value" per P5
+        confidence TEXT NOT NULL DEFAULT 'weak',  -- definitive | strong | weak | hint
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     )
     """,
@@ -615,6 +615,38 @@ ALTER TABLE fingerprints_new RENAME TO fingerprints;
 COMMIT;
 """
 
+_MIGRATION_V5 = """
+BEGIN TRANSACTION;
+
+CREATE TABLE fingerprints_v5 (
+    id         TEXT PRIMARY KEY,
+    asset_id   TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    tech       TEXT NOT NULL,
+    version    TEXT,
+    category   TEXT NOT NULL DEFAULT 'other',
+    evidence   TEXT NOT NULL DEFAULT '',
+    confidence TEXT NOT NULL DEFAULT 'weak',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+INSERT INTO fingerprints_v5
+    SELECT id, asset_id, tech, version, category, evidence,
+        CASE
+            WHEN typeof(confidence) = 'text' THEN confidence
+            WHEN CAST(confidence AS INTEGER) >= 90 THEN 'definitive'
+            WHEN CAST(confidence AS INTEGER) >= 75 THEN 'strong'
+            WHEN CAST(confidence AS INTEGER) >= 50 THEN 'weak'
+            ELSE 'hint'
+        END,
+        created_at
+    FROM fingerprints;
+
+DROP TABLE fingerprints;
+ALTER TABLE fingerprints_v5 RENAME TO fingerprints;
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
     _MIGRATION_V1,
     # v2 → add leads table for intel / Shodan triage.
@@ -624,6 +656,9 @@ _MIGRATIONS: list[str] = [
     _MIGRATION_V3,
     # v4 → convert fingerprints.id to TEXT (ULID); add idx_fingerprints_tech index.
     _MIGRATION_V4,
+    # v5 → convert fingerprints.confidence from INTEGER (0-100) to TEXT tier
+    #       (definitive | strong | weak | hint) per Phase 3.2 Principle 1.
+    _MIGRATION_V5,
 ]
 
 

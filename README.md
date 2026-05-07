@@ -60,45 +60,83 @@ LOG_FORMAT=console     # console (pretty) or json (structured)
 
 ---
 
-## Current Capabilities (Phase 3)
+## Current Capabilities (Phase 3.2)
 
-### Fingerprinting Engine (Phase 3)
+### Fingerprinting Engine (Phase 3.2)
 
-After HTTP probing, each successful `ProbeResult` is passed through four pure-function
-parsers plus an async favicon fetcher. Results are deduped with confidence boosting,
-persisted to `fingerprints`, and summarised back in the `assets` row.
+After HTTP probing, each successful `ProbeResult` is passed through five parsers.
+Raw signals are deduplicated and filtered through five **design principles** before
+being persisted to `fingerprints` and back-filled into the `assets` row.
+
+#### The Five Principles
+
+These answer *why* the engine works the way it does, not just what rules exist.
+
+**Principle 1 — Confidence is a tier, not a sliding scale.**
+Every rule emits one of four tiers:
+
+| Tier | Meaning | Examples |
+|---|---|---|
+| `definitive` | Version-bearing, vendor-specific, or mathematically exact | `Server: nginx/1.18.0`, `X-Generator: Drupal 9`, `laravel_session` cookie, `cert-expired` from date comparison |
+| `strong` | Vendor-specific signal without version, or well-known vendor pattern | `Server: cloudflare`, `X-Drupal-Cache`, `ASP.NET_SessionId` cookie, Let's Encrypt issuer |
+| `weak` | Single indirect heuristic — needs corroboration | `PHPSESSID` cookie, `/wp-content/` path, Magento body class |
+| `hint` | Suggestive only; never produces a standalone result | `X-Runtime` header (any Rack app), `_session_id` cookie, `data-turbo` attribute |
+
+A `weak` signal with no other signal for the same tech is **dropped**.
+A `hint` alone is always **dropped**.
+
+**Principle 2 — Same-category mutual exclusion.**
+Within each category (`cms`, `framework`, `web-server`, …):
+- If a `definitive` detection exists: all `weak` (and `hint`) signals for that category are suppressed.
+- If two `definitive` signals exist for the same category: the second is **demoted** to `strong` with a warning.
+- If only a `strong` exists: `hint` signals are suppressed.
+
+This is the rule that fixes Drupal+Magento collisions: Drupal `definitive` (from `X-Generator`) suppresses Magento `weak` (from body class) — no per-case patch needed.
+
+**Principle 3 — Vendor precedence over generic.**
+Some platforms (Zendesk, GitHub, Vercel, Netlify) serve other frameworks internally or host arbitrary
+content. When these are detected at `strong` or above, their override rules suppress misleading
+detections. Configured in `bounty/fingerprint/data/vendor_overrides.json`.
+
+Examples:
+- `zendesk` detected → suppress `rails-hotwire` (Zendesk runs Rails internally, but the asset is a help-centre)
+- `github` detected → suppress all `cms` category findings (GitHub Pages hosts arbitrary static content)
+
+**Principle 4 — Corroboration boost is conservative.**
+- Two independent signals at the **same tier** → upgrade by **one tier** (max `definitive`).
+- Three or more at the same tier → **still only one-tier upgrade** (no double-jump).
+- One `definitive` + any weaker → stays `definitive`; weaker absorbed into evidence.
+
+**Principle 5 — Evidence is structured per source.**
+Every evidence string uses `source:key=value` format for machine-parseability:
+```
+header:server=nginx/1.18.0; cookie:PHPSESSID; meta:generator=WordPress 6.4
+```
+Sources: `header:`, `cookie:`, `meta:`, `body:`, `tls:`, `favicon:`.
 
 #### Parsers
 
 | Parser | Source | Examples detected |
 |---|---|---|
-| `headers.py` | HTTP response headers | nginx, apache, IIS, cloudflare, cloudfront, fastly, akamai, PHP, ASP.NET, drupal, wordpress, jenkins, shopify |
-| `cookies.py` | Set-Cookie names | PHPSESSID→php, JSESSIONID→java, laravel_session, cf_clearance→cloudflare, incap_ses→imperva, datadome |
-| `body.py` | HTML body (BeautifulSoup + lxml) | `<meta generator>` WordPress/Drupal/Hugo/Jekyll, path patterns `/wp-content/`/`/_next/`, `__NEXT_DATA__`, title-based admin panels |
-| `tls.py` | TLS certificate fields | self-signed, Let's Encrypt, legacy TLS, cert-expired, cert-expiring-soon |
-| `favicon.py` | Favicon byte hash | Shodan/FOFA-compatible mmh3(base64(favicon)) lookup against `favicon_db.json` |
-
-#### Confidence Scoring
-
-- **90–100**: Direct version-bearing signal (Server header with version, `<meta generator>`, `X-Drupal-Cache`)
-- **60–89**: Strong indirect signal (JSESSIONID cookie, `/wp-content/` path, distinctive favicon hash)
-- **30–59**: Weak heuristic (generic body class patterns, admin path presence)
-- Two signals for same tech → `max(conf) + 10`, capped at 100
-- Three+ signals → `max(conf) + 20`, capped at 100
+| `headers.py` | HTTP response headers | nginx/apache/IIS (DEFINITIVE with version, STRONG without), cloudflare (STRONG via Server, DEFINITIVE via CF-Ray), PHP/ASP.NET, Drupal, WordPress, Jenkins, Shopify, CloudFront, Akamai, DataDome |
+| `cookies.py` | Set-Cookie names | laravel_session→DEFINITIVE, cf_clearance→DEFINITIVE, incap_ses→DEFINITIVE, ASP.NET_SessionId→STRONG, PHPSESSID→WEAK, JSESSIONID→WEAK |
+| `body.py` | HTML body (BeautifulSoup + lxml) | `<meta generator>` → DEFINITIVE, `/_next/static/`/`__NEXT_DATA__` → DEFINITIVE, `/wp-content/` → STRONG, Zendesk script src → STRONG (suppresses rails-hotwire), Magento body class → WEAK |
+| `tls.py` | TLS certificate fields | self-signed/cert-expired/legacy-TLS → DEFINITIVE, Let's Encrypt/cert-expiring-soon → STRONG |
+| `favicon.py` | Favicon byte hash | Shodan/FOFA-compatible mmh3(base64(favicon)) → DEFINITIVE on match |
 
 #### Admin Panel Detection
 
-`body.py` contains title-based detection for 30+ admin panels & services:
-Jenkins, Grafana, Kibana, phpMyAdmin, Adminer, Confluence, Jira, GitLab, Gitea, 
+`body.py` contains title-based detection (`STRONG` tier) for 30+ admin panels:
+Jenkins, Grafana, Kibana, phpMyAdmin, Adminer, Confluence, Jira, GitLab, Gitea,
 Argo CD, Harbor, Nexus, SonarQube, RabbitMQ Management, Kubernetes Dashboard,
 Portainer, Rancher, Zabbix, Nagios, Prometheus, Mattermost, Rocket.Chat,
 Discourse, Webmin, cPanel, Plesk, Apache Spark, Apache Airflow, Apache Solr,
-Consul, Vault, and default pages (nginx-default-page, directory-listing, **phpinfo-exposed**).
+Consul, Spinnaker. Plus `DEFINITIVE` tier for phpinfo-exposed and directory-listing.
 
 #### Favicon Hash DB
 
-`bounty/fingerprint/data/favicon_db.json` contains ~33 starter entries (one per tool
-listed above). Hash fields are `null` placeholders — fill as you encounter real installs:
+`bounty/fingerprint/data/favicon_db.json` contains ~33 starter entries.
+Hash fields are `null` placeholders — fill as you encounter real installs:
 
 ```bash
 # After observing a real Jenkins instance
@@ -113,9 +151,14 @@ program, enabling further probing.
 
 #### Database
 
-Migration V4 converts `fingerprints.id` from `INTEGER AUTOINCREMENT` to `TEXT` (ULID).
-The `assets` table gains `server`, `cdn`, and `waf` summary columns updated from the
-highest-confidence fingerprint in each category.
+Migration V5 converts `fingerprints.confidence` from `INTEGER` (0–100) to `TEXT` tier
+(`definitive` | `strong` | `weak` | `hint`) per Principle 1.
+Migration V4 converted `fingerprints.id` from `INTEGER AUTOINCREMENT` to `TEXT` (ULID).
+
+#### Vendor Overrides
+
+`bounty/fingerprint/data/vendor_overrides.json` — edit to add or change vendor suppression rules.
+Current entries: `zendesk`, `github`, `github-pages`, `vercel`, `netlify`, `heroku`.
 
 #### CLI
 
@@ -130,13 +173,13 @@ bounty fingerprint add-favicon-hash <tech> <hash> [--category=other]
 bounty smoke-recon --target hackerone.com --intensity gentle
 ```
 
-Sample `smoke-recon` output with fingerprinting:
+Sample `smoke-recon` output with fingerprinting (tier shown in uppercase):
 ```
   ASSETS DISCOVERED: 8
-    [200] hackerone.com         HackerOne | Leader in ...  server=cloudflare cdn=cloudflare
-           techs: cloudflare(cdn,100),  drupal(cms,100),  fastly(cdn,90)
-    [200] docs.hackerone.com    Home | HackerOne Help ...  server=cloudflare cdn=cloudflare
-           techs: cloudflare(cdn,100),  nextjs(framework,100)
+    [200] hackerone.com             HackerOne | Leader in ...  server=cloudflare cdn=cloudflare
+           techs: cloudflare(cdn,DEFINITIVE),  drupal(cms,DEFINITIVE),  fastly(cdn,STRONG)
+    [200] docs.hackerone.com        Home | HackerOne Help ...  server=cloudflare cdn=cloudflare
+           techs: zendesk(other,STRONG),  cloudflare(cdn,DEFINITIVE)
 ```
 
 ---
@@ -236,18 +279,21 @@ bounty/
 ## Development
 
 ```bash
-# Run unit tests (no network)
-pytest tests/smoke.py tests/test_phase2.py -k "not live and not pipeline" -v
+# Run unit tests only (no network required) — this is the default
+pytest
 
-# Run integration test (requires network)
-pytest tests/test_phase2.py::test_recon_pipeline_mini -v -s
+# Run integration tests (requires live DNS + HTTP access)
+pytest -m integration
+
+# Run everything (unit + integration)
+pytest -m ''
 
 # Type-check
 mypy bounty/ --strict
 
 # Lint
 ruff check bounty/ tests/
-```
+
 
 ---
 
@@ -357,4 +403,3 @@ bounty leads promote <lead-id> --program my-prog
 # 5. Run recon on the promoted assets
 bounty smoke-recon --target <asset-host>
 ```
-

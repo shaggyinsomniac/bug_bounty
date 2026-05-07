@@ -56,40 +56,40 @@ def parse_tls(
     protocol = (tls.protocol or "").strip()
     not_after_raw = tls.not_after
 
-    # ── Self-signed: issuer == subject ────────────────────────────────────
+    # ── Self-signed: issuer == subject — mathematically exact → DEFINITIVE ──
     if issuer and subject and issuer == subject:
         results.append(
             FingerprintResult(
                 tech="self-signed-cert",
                 category="other",
-                confidence=90,
-                evidence=f"issuer==subject: {tls.issuer or ''}",
+                confidence="definitive",
+                evidence=f"tls:issuer-equals-subject={tls.issuer or ''}",
             )
         )
 
-    # ── Let's Encrypt issuer ──────────────────────────────────────────────
+    # ── Let's Encrypt issuer — specific CA strings → STRONG ───────────────
     if "let's encrypt" in issuer or "letsencrypt" in issuer or "r3" in issuer or "e1" in issuer:
         results.append(
             FingerprintResult(
                 tech="lets-encrypt",
                 category="other",
-                confidence=90,
-                evidence=f"issuer: {tls.issuer or ''}",
+                confidence="strong",
+                evidence=f"tls:issuer={tls.issuer or ''}",
             )
         )
 
-    # ── Legacy TLS protocol ───────────────────────────────────────────────
+    # ── Legacy TLS protocol — explicit version string → DEFINITIVE ────────
     if protocol and any(p in protocol for p in _LEGACY_PROTOCOLS):
         results.append(
             FingerprintResult(
                 tech="legacy-tls",
                 category="other",
-                confidence=95,
-                evidence=f"protocol: {protocol}",
+                confidence="definitive",
+                evidence=f"tls:protocol={protocol}",
             )
         )
 
-    # ── Certificate expiry ────────────────────────────────────────────────
+    # ── Certificate expiry — factual time comparison ───────────────────────
     now = datetime.now(tz=timezone.utc)
     not_after = _parse_date(not_after_raw)
     if not_after:
@@ -99,8 +99,8 @@ def parse_tls(
                 FingerprintResult(
                     tech="cert-expired",
                     category="other",
-                    confidence=100,
-                    evidence=f"cert expired: {not_after_raw}",
+                    confidence="definitive",
+                    evidence=f"tls:cert-expired={not_after_raw}",
                 )
             )
         elif delta_days <= 7:
@@ -108,8 +108,8 @@ def parse_tls(
                 FingerprintResult(
                     tech="cert-expiring-soon",
                     category="other",
-                    confidence=95,
-                    evidence=f"cert expires in {delta_days}d: {not_after_raw}",
+                    confidence="strong",
+                    evidence=f"tls:cert-expires-in-{delta_days}d={not_after_raw}",
                 )
             )
 

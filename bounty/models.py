@@ -165,6 +165,27 @@ class AssetDraft(_Base):
 
 FingerprintCategory = Literal["web-server", "cms", "framework", "language", "cdn", "waf", "other"]
 
+# Confidence tier system (Principle 1 — Phase 3.2).
+# Tiers encode signal strength; each parser assigns a tier per rule.
+# Use TIER_ORDER for numeric comparisons.
+ConfidenceTier = Literal["definitive", "strong", "weak", "hint"]
+
+TIER_ORDER: dict[str, int] = {
+    "hint": 0,
+    "weak": 1,
+    "strong": 2,
+    "definitive": 3,
+}
+"""Numeric rank for comparing confidence tiers (higher = more confident)."""
+
+TIER_UP: dict[str, ConfidenceTier] = {
+    "hint": "weak",
+    "weak": "strong",
+    "strong": "definitive",
+    "definitive": "definitive",
+}
+"""One-step upgrade map used by the corroboration boost (Principle 4)."""
+
 
 class FingerprintResult(_Base):
     """A single technology detection on an asset."""
@@ -173,7 +194,9 @@ class FingerprintResult(_Base):
     version: str | None = None
     category: FingerprintCategory = "other"
     evidence: str = ""
-    confidence: int = Field(default=50, ge=0, le=100)
+    # Confidence tier: definitive > strong > weak > hint.
+    # 'hint' signals never survive deduplication alone (Principle 1).
+    confidence: ConfidenceTier = "weak"
 
     # Set after DB insert
     id: str | None = None

@@ -3,6 +3,8 @@ bounty.fingerprint.body — Technology detection from HTML response bodies.
 
 Pure function, no I/O.  Uses BeautifulSoup + lxml for parsing.
 Capped at 512 KB to avoid memory pressure on large documents.
+
+Evidence format (Principle 5): ``body:<source>=<value>``, ``meta:generator=<value>``, ``body:path=…``, ``body:class=…``, ``body:script=…``, ``body:title=…``, ``body:comment=…``.
 """
 
 from __future__ import annotations
@@ -18,72 +20,80 @@ if TYPE_CHECKING:
 _CAP_BYTES = 512 * 1024  # 512 KB
 
 # ── Path-based patterns (src/href in link/script tags) ────────────────────
-_PATH_RULES: list[tuple[str, str, str, int]] = [
-    # (path_fragment, tech, category, confidence)
-    ("/wp-content/", "wordpress", "cms", 80),
-    ("/wp-includes/", "wordpress", "cms", 80),
-    ("/sites/all/", "drupal", "cms", 80),
-    ("/sites/default/", "drupal", "cms", 80),
-    ("/media/jui/", "joomla", "cms", 80),
-    ("/skin/frontend/", "magento", "cms", 80),
-    ("/typo3/", "typo3", "cms", 80),
-    ("/umbraco/", "umbraco", "cms", 80),
-    ("/_next/static/", "nextjs", "framework", 90),
-    ("/_nuxt/", "nuxt", "framework", 90),
-    ("/static/admin/", "django", "framework", 75),
-    ("/themes/shopify/", "shopify", "cms", 80),
+# (path_fragment, tech, category, confidence_tier)
+_PATH_RULES: list[tuple[str, str, str, str]] = [
+    ("/wp-content/", "wordpress", "cms", "strong"),
+    ("/wp-includes/", "wordpress", "cms", "strong"),
+    ("/sites/all/", "drupal", "cms", "strong"),
+    ("/sites/default/", "drupal", "cms", "strong"),
+    ("/media/jui/", "joomla", "cms", "strong"),
+    ("/skin/frontend/", "magento", "cms", "strong"),   # Magento 1.x CDN path
+    ("/typo3/", "typo3", "cms", "strong"),
+    ("/umbraco/", "umbraco", "cms", "strong"),
+    ("/_next/static/", "nextjs", "framework", "definitive"),  # Next.js chunk CDN path
+    ("/_nuxt/", "nuxt", "framework", "definitive"),           # Nuxt chunk CDN path
+    ("/static/admin/", "django", "framework", "weak"),        # Django admin static
+    ("/themes/shopify/", "shopify", "cms", "strong"),
 ]
 
 # ── Title-based admin panel signals ───────────────────────────────────────
-_TITLE_RULES: list[tuple[str, str, int]] = [
-    # (substring, tech, confidence)  — case-insensitive
-    ("welcome to nginx", "nginx-default-page", 85),
-    ("apache2 ubuntu default page", "apache-default-page", 85),
-    ("it works!", "apache-default-page", 85),
-    ("iis windows server", "iis-default-page", 85),
-    ("iis10", "iis-default-page", 85),
-    ("internet information services", "iis-default-page", 85),
-    ("index of /", "directory-listing", 95),
-    ("phpinfo()", "phpinfo-exposed", 100),
-    ("jenkins", "jenkins", 95),
-    ("dashboard [jenkins]", "jenkins", 95),
-    ("grafana", "grafana", 95),
-    ("kibana", "kibana", 95),
-    ("phpmyadmin", "phpmyadmin", 95),
-    ("adminer", "adminer", 95),
-    ("confluence", "confluence", 90),
-    ("jira", "jira", 90),
-    ("gitlab", "gitlab", 90),
-    ("gitea", "gitea", 90),
-    ("argo cd", "argocd", 95),
-    ("harbor", "harbor", 95),
-    ("nexus repository", "nexus", 95),
-    ("sonarqube", "sonarqube", 90),
-    ("rabbitmq management", "rabbitmq-mgmt", 95),
-    ("apache spark", "spark", 95),
-    ("apache airflow", "airflow", 95),
-    ("apache solr", "solr", 95),
-    ("consul", "consul", 90),
-    ("kubernetes dashboard", "k8s-dashboard", 95),
-    ("portainer", "portainer", 95),
-    ("rancher", "rancher", 90),
-    ("zabbix", "zabbix", 90),
-    ("nagios", "nagios", 90),
-    ("prometheus", "prometheus", 90),
-    ("mattermost", "mattermost", 85),
-    ("rocket.chat", "rocketchat", 85),
-    ("discourse", "discourse", 85),
-    ("webmin", "webmin", 90),
-    ("cpanel", "cpanel", 90),
-    ("plesk", "plesk", 90),
-    ("drone", "drone-ci", 90),
-    ("spinnaker", "spinnaker", 90),
+# (substring, tech, confidence_tier)  — case-insensitive
+_TITLE_RULES: list[tuple[str, str, str]] = [
+    # Default server pages — STRONG (specific page text)
+    ("welcome to nginx", "nginx-default-page", "strong"),
+    ("apache2 ubuntu default page", "apache-default-page", "strong"),
+    # "It works!" is the Apache default but too short to be unambiguous → WEAK
+    ("it works!", "apache-default-page", "weak"),
+    ("iis windows server", "iis-default-page", "strong"),
+    ("iis10", "iis-default-page", "strong"),
+    ("internet information services", "iis-default-page", "strong"),
+    # Directory listing format is very specific → DEFINITIVE
+    ("index of /", "directory-listing", "definitive"),
+    # phpinfo() in title is unambiguous → DEFINITIVE
+    ("phpinfo()", "phpinfo-exposed", "definitive"),
+    # Admin panels — titles are modifiable but these are very specific → STRONG
+    ("jenkins", "jenkins", "strong"),
+    ("dashboard [jenkins]", "jenkins", "strong"),
+    ("grafana", "grafana", "strong"),
+    ("kibana", "kibana", "strong"),
+    ("phpmyadmin", "phpmyadmin", "strong"),
+    ("adminer", "adminer", "strong"),
+    ("confluence", "confluence", "strong"),
+    ("jira", "jira", "strong"),
+    ("gitlab", "gitlab", "strong"),
+    ("gitea", "gitea", "strong"),
+    ("argo cd", "argocd", "strong"),
+    ("harbor", "harbor", "strong"),
+    ("nexus repository", "nexus", "strong"),
+    ("sonarqube", "sonarqube", "strong"),
+    ("rabbitmq management", "rabbitmq-mgmt", "strong"),
+    ("apache spark", "spark", "strong"),
+    ("apache airflow", "airflow", "strong"),
+    ("apache solr", "solr", "strong"),
+    ("consul", "consul", "strong"),
+    ("kubernetes dashboard", "k8s-dashboard", "strong"),
+    ("portainer", "portainer", "strong"),
+    ("rancher", "rancher", "strong"),
+    ("zabbix", "zabbix", "strong"),
+    ("nagios", "nagios", "strong"),
+    ("prometheus", "prometheus", "strong"),
+    ("mattermost", "mattermost", "strong"),
+    ("rocket.chat", "rocketchat", "strong"),
+    ("discourse", "discourse", "strong"),
+    ("webmin", "webmin", "strong"),
+    ("cpanel", "cpanel", "strong"),
+    ("plesk", "plesk", "strong"),
+    # "drone" alone is too generic → WEAK
+    ("drone", "drone-ci", "weak"),
+    ("spinnaker", "spinnaker", "strong"),
 ]
 
 # ── Regex patterns for meta generator tag ─────────────────────────────────────
-_GENERATOR_RE = re.compile(r"<meta\s[^>]*name=[\"']generator[\"']\s[^>]*content=[\"']([^\"'<]+)", re.IGNORECASE)
+_GENERATOR_RE = re.compile(
+    r"<meta\s[^>]*name=[\"']generator[\"']\s[^>]*content=[\"']([^\"'<]+)",
+    re.IGNORECASE,
+)
 _GENERATOR_TECHS: dict[str, tuple[str, str]] = {
-    # (key_lower, (tech, category))
     "wordpress": ("wordpress", "cms"),
     "drupal": ("drupal", "cms"),
     "joomla": ("joomla", "cms"),
@@ -98,13 +108,13 @@ _GENERATOR_TECHS: dict[str, tuple[str, str]] = {
     "magento": ("magento", "cms"),
     "prestashop": ("prestashop", "cms"),
     "moodle": ("moodle", "cms"),
+    "zendesk": ("zendesk", "other"),
 }
 _VERSION_RE = re.compile(r"(\d+[\.\d]*)")
 
 
 def _decode_body(body: bytes) -> str:
     """Decode response bytes to string with best-effort charset detection."""
-    # Try chardet first, then fall back to utf-8 with replacement
     try:
         import chardet
         detected = chardet.detect(body[:4096])
@@ -117,6 +127,8 @@ def _decode_body(body: bytes) -> str:
 def parse_body(body: bytes, content_type: str | None, url: str) -> list[FingerprintResult]:
     """Detect technologies from an HTML response body.
 
+    Evidence format: structured ``source:key=value`` per Principle 5.
+
     Args:
         body: Raw response bytes.
         content_type: Value of the Content-Type response header (may be None).
@@ -126,8 +138,6 @@ def parse_body(body: bytes, content_type: str | None, url: str) -> list[Fingerpr
         List of ``FingerprintResult`` with ``asset_id=None``.
     """
     ct = (content_type or "").lower()
-    # Only skip if we *know* this isn't HTML/text (e.g. image/png, application/json).
-    # Treat empty/None content_type as HTML (permissive default — many CDNs strip it).
     if ct and "html" not in ct and "text" not in ct:
         return []
 
@@ -139,13 +149,12 @@ def parse_body(body: bytes, content_type: str | None, url: str) -> list[Fingerpr
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(capped, "lxml")
     except Exception:  # noqa: BLE001
-        # Fall back to raw text scanning if lxml fails
         soup = None
 
     results: list[FingerprintResult] = []
     text = _decode_body(capped)
 
-    # ── meta name="generator" ─────────────────────────────────────────────
+    # ── meta name="generator" → version-bearing → DEFINITIVE ─────────────
     m = _GENERATOR_RE.search(text)
     if m:
         gen_value = m.group(1).strip()
@@ -158,20 +167,20 @@ def parse_body(body: bytes, content_type: str | None, url: str) -> list[Fingerpr
                         tech=tech,
                         version=ver_m.group(1) if ver_m else None,
                         category=cat,  # type: ignore[arg-type]
-                        confidence=95,
-                        evidence=f"meta generator: {gen_value[:200]}",
+                        confidence="definitive",
+                        evidence=f"meta:generator={gen_value[:200]}",
                     )
                 )
                 break
 
-    # ── Comment: Powered by Shopify ────────────────────────────────────────
+    # ── Comment: Powered by Shopify → STRONG ──────────────────────────────
     if "powered by shopify" in text.lower():
         results.append(
             FingerprintResult(
                 tech="shopify",
                 category="cms",
-                confidence=80,
-                evidence="comment: Powered by Shopify",
+                confidence="strong",
+                evidence="body:comment=powered-by-shopify",
             )
         )
 
@@ -184,7 +193,6 @@ def parse_body(body: bytes, content_type: str | None, url: str) -> list[Fingerpr
                 if val:
                     url_attrs.append(str(val))
     else:
-        # Fallback: crude regex scan
         url_attrs = re.findall(r'(?:src|href)=["\']([^"\']+)', text)
 
     for path in url_attrs:
@@ -194,16 +202,16 @@ def parse_body(body: bytes, content_type: str | None, url: str) -> list[Fingerpr
                     FingerprintResult(
                         tech=tech,
                         category=cat,  # type: ignore[arg-type]
-                        confidence=conf,
-                        evidence=f"path: {path[:200]}",
+                        confidence=conf,  # type: ignore[arg-type]
+                        evidence=f"body:path={path[:200]}",
                     )
                 )
                 break
 
     # ── Zendesk detection (runs BEFORE body-class / script signals) ────────
+    # Principle 3: when Zendesk is detected at STRONG+, suppress rails-hotwire.
     zendesk_detected = False
     if soup is not None:
-        # Check script/link srcs for zendesk.com
         for tag in soup.find_all(["script", "link"]):
             for attr in ("src", "href"):
                 val = str(tag.get(attr, ""))
@@ -212,70 +220,71 @@ def parse_body(body: bytes, content_type: str | None, url: str) -> list[Fingerpr
                     break
             if zendesk_detected:
                 break
-    # Also check raw text for meta generator or body class
-    if not zendesk_detected and (
-        'name="generator"' in text.lower() and "zendesk" in text.lower()
-    ):
-        zendesk_detected = True
+    # Also check meta generator or zd-zopim class (handled by meta:generator above, but catch others)
     if not zendesk_detected and "zd-zopim" in text:
         zendesk_detected = True
     if zendesk_detected:
-        results.append(
-            FingerprintResult(
-                tech="zendesk",
-                category="other",
-                confidence=95,
-                evidence="zendesk.com in script/link src, meta generator, or zd-zopim body class",
+        # Only add if not already added by meta:generator
+        if not any(r.tech == "zendesk" for r in results):
+            results.append(
+                FingerprintResult(
+                    tech="zendesk",
+                    category="other",
+                    confidence="strong",
+                    evidence="body:zendesk-src",
+                )
             )
-        )
 
     # ── Body class attribute ────────────────────────────────────────────────
     if soup is not None:
         body_tag = soup.find("body")
         if body_tag:
-            # Extract class attribute safely
             raw_class = body_tag.get("class")
             if isinstance(raw_class, list):
                 cls = " ".join(str(c) for c in raw_class)
             else:
                 cls = str(raw_class) if raw_class else ""
+            # WordPress-specific body class prefix → STRONG
             if "wp-" in cls:
                 results.append(
                     FingerprintResult(
                         tech="wordpress",
                         category="cms",
-                        confidence=70,
-                        evidence=f"body.class: {cls[:200]}",
+                        confidence="strong",
+                        evidence=f"body:class={cls[:200]}",
                     )
                 )
-            # Require at least one genuinely Magento-specific class prefix.
-            # "cms-page" and "page-" are also emitted by Drupal/other CMSs,
-            # so they are intentionally excluded from this rule.
+            # Require genuinely Magento-specific class prefixes.
+            # "cms-page" and "page-" are also emitted by Drupal/other CMSs and
+            # are intentionally excluded. See Phase 3.1 fix.
             if any(x in cls for x in ("catalog-product", "catalog-category", "checkout-")):
                 results.append(
                     FingerprintResult(
                         tech="magento",
                         category="cms",
-                        confidence=60,
-                        evidence=f"body.class: {cls[:200]}",
+                        confidence="weak",
+                        evidence=f"body:class={cls[:200]}",
                     )
                 )
 
     # ── Script / data signals ──────────────────────────────────────────────
-    script_signals: list[tuple[str, str, str, int]] = [
-        ("__NEXT_DATA__", "nextjs", "framework", 95),
-        ("__NUXT__", "nuxt", "framework", 95),
-        ("data-react-helmet", "react", "framework", 80),
-        ("window.__REACT_DEVTOOLS", "react", "framework", 80),
-        ("ng-app", "angularjs", "framework", 80),
-        ("ng-controller", "angularjs", "framework", 80),
-        # Hotwire / ActionCable are Rails markers but also appear on Zendesk help-centres.
-        # Lower confidence (50) and suppress entirely when Zendesk already detected.
-        ("data-turbo", "rails-hotwire", "framework", 50),
-        ("action-cable-meta", "rails-hotwire", "framework", 50),
+    # (signal, tech, category, tier)
+    script_signals: list[tuple[str, str, str, str]] = [
+        ("__NEXT_DATA__", "nextjs", "framework", "definitive"),   # Next.js inline data blob
+        ("__NUXT__", "nuxt", "framework", "definitive"),          # Nuxt inline state
+        ("data-react-helmet", "react", "framework", "strong"),    # React-Helmet specific attr
+        # window.__REACT_DEVTOOLS appears in development builds, stripped in prod → HINT
+        ("window.__REACT_DEVTOOLS", "react", "framework", "hint"),
+        ("ng-app", "angularjs", "framework", "strong"),           # AngularJS directive
+        ("ng-controller", "angularjs", "framework", "strong"),
+        # Hotwire/Turbo markers — present on Zendesk, GitHub, and others that host
+        # Rails internally. Not reliable for fingerprinting the *asset* as a Rails app.
+        # Suppress when Zendesk already detected (Principle 3 applied in body parser).
+        ("data-turbo", "rails-hotwire", "framework", "hint"),
+        ("action-cable-meta", "rails-hotwire", "framework", "hint"),
     ]
     for signal, tech, cat, conf in script_signals:
-        # Skip Rails-hotwire signals when we already know this is Zendesk.
+        # Principle 3 early exit: suppress rails-hotwire when Zendesk detected
         if tech == "rails-hotwire" and zendesk_detected:
             continue
         if signal in text:
@@ -283,8 +292,8 @@ def parse_body(body: bytes, content_type: str | None, url: str) -> list[Fingerpr
                 FingerprintResult(
                     tech=tech,
                     category=cat,  # type: ignore[arg-type]
-                    confidence=conf,
-                    evidence=f"script: {signal}",
+                    confidence=conf,  # type: ignore[arg-type]
+                    evidence=f"body:script={signal}",
                 )
             )
 
@@ -302,15 +311,12 @@ def parse_body(body: bytes, content_type: str | None, url: str) -> list[Fingerpr
     if title_text:
         for substring, tech, conf in _TITLE_RULES:
             if substring in title_text:
-                # Special case: Vault needs "sealed" in body for high confidence
-                if tech == "vault" and "sealed" not in text.lower():
-                    conf = 75
                 results.append(
                     FingerprintResult(
                         tech=tech,
                         category="other",
-                        confidence=conf,
-                        evidence=f"title: {title_text[:200]}",
+                        confidence=conf,  # type: ignore[arg-type]
+                        evidence=f"body:title={title_text[:200]}",
                     )
                 )
 

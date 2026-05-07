@@ -515,6 +515,7 @@ async def recon_pipeline(
     discovered_hosts: set[str] = set()
     asset_ids: list[str] = []
     pipeline_error: str | None = None
+    probes_completed: int = 0
 
     # Determine target mix — controls which phases are relevant.
     in_scope_targets = [t for t in targets if t.scope_type == "in_scope"]
@@ -667,10 +668,11 @@ async def recon_pipeline(
         # ── Phase 4: HTTP probe ───────────────────────────────────────────────
         await _update_scan_phase(effective_db, scan_id, "http_probe", "running")
 
-        probed_count = 0
+        # probes_completed counts each individual HTTP request attempted
+        # (one per scheme+port combination, not per hostname).
 
         async def _probe_host(hostname: str, resolve_res: ResolveResult) -> None:
-            nonlocal probed_count
+            nonlocal probes_completed
             ip = resolve_res.primary_ip
             host_log = bound_log.bind(hostname=hostname, ip=ip)
 
@@ -686,6 +688,7 @@ async def recon_pipeline(
 
             for scheme, port in scheme_ports:
                 url = _asset_url(scheme, hostname, port)
+                probes_completed += 1
                 result = await probe(url, verify=False)
                 if not result.ok:
                     host_log.debug("probe_failed", url=url, error=result.error)
@@ -716,7 +719,6 @@ async def recon_pipeline(
                         },
                         program_id=program_id,
                     )
-            probed_count += 1
 
         # Per-scan unreachability tracking for direct IP probing
         fast_fail_counts: dict[str, int] = {}
@@ -724,7 +726,7 @@ async def recon_pipeline(
 
         async def _probe_direct_ip(ip: str) -> None:
             """Probe a direct IP target at standard + extra web ports."""
-            nonlocal probed_count
+            nonlocal probes_completed
             if ip in unreachable_ips:
                 return
             ip_log = bound_log.bind(ip=ip)
@@ -746,6 +748,7 @@ async def recon_pipeline(
                 if ip in unreachable_ips:
                     break
                 url = _asset_url(scheme, ip, port)
+                probes_completed += 1
                 result = await probe(url, verify=False)
 
                 if not result.ok:
@@ -788,7 +791,6 @@ async def recon_pipeline(
                         },
                         program_id=program_id,
                     )
-            probed_count += 1
 
         probe_tasks = [asyncio.create_task(_probe_host(h, r)) for h, r in alive_hosts.items()]
         ip_tasks = [asyncio.create_task(_probe_direct_ip(ip)) for ip in direct_ips]
@@ -798,13 +800,13 @@ async def recon_pipeline(
 
         bound_log.info(
             "http_probe_done",
-            probed=probed_count,
-            assets_found=len(asset_ids),
+            probes_completed=probes_completed,
+            unique_assets=len(set(asset_ids)),
             unreachable_ips=len(unreachable_ips),
         )
         await _update_scan_phase(
             effective_db, scan_id, "http_probe", "completed",
-            {"probed": probed_count, "assets": len(asset_ids)},
+            {"probes_completed": probes_completed, "unique_assets": len(set(asset_ids))},
         )
 
         # ── Phase 5: Fingerprinting ───────────────────────────────────────
@@ -828,7 +830,8 @@ async def recon_pipeline(
 
     bound_log.info(
         "recon_pipeline_done",
-        asset_ids=len(asset_ids),
+        probes_completed=probes_completed,
+        unique_assets=len(set(asset_ids)),
         scan_id=scan_id,
         status="failed" if pipeline_error else "completed",
     )

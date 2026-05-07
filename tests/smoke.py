@@ -112,6 +112,7 @@ async def test_get_conn_row_factory() -> None:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_probe_httpbin() -> None:
     """probe() should return a successful ProbeResult for httpbin.org/get."""
     result = await probe("https://httpbin.org/get")
@@ -126,6 +127,7 @@ async def test_probe_httpbin() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_probe_returns_error_result_on_failure() -> None:
     """probe() against a non-existent host must return ProbeResult with error set."""
     result = await probe("https://this-domain-does-not-exist-bounty-test.invalid/")
@@ -136,6 +138,7 @@ async def test_probe_returns_error_result_on_failure() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_probe_captures_redirect_chain() -> None:
     """probe() should record the full redirect chain."""
     # httpbin /redirect/1 returns 302 → /get
@@ -147,6 +150,7 @@ async def test_probe_captures_redirect_chain() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_probe_respects_concurrency_limit() -> None:
     """10 concurrent probes against the same host should complete successfully."""
     urls = ["https://httpbin.org/delay/0"] * 10

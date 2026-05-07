@@ -59,8 +59,8 @@ def lookup_favicon_db(hash_val: int) -> FingerprintResult | None:
     return FingerprintResult(
         tech=str(entry["tech"]),
         category=cat,  # type: ignore[arg-type]
-        confidence=85,
-        evidence=f"favicon-hash: {hash_val}",
+        confidence="definitive",  # favicon hash match is unmistakable
+        evidence=f"favicon:hash={hash_val}",
     )
 
 

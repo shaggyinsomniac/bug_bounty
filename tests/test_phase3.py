@@ -2,15 +2,16 @@
 tests/test_phase3.py — Phase 3 (Fingerprinting Engine) test suite.
 
 Test sections:
-1. parse_headers — 12 cases
-2. parse_cookies — 15 cases
-3. parse_body    — 12 cases
-4. parse_tls     — 5 cases
-5. favicon_hash  — stability test
-6. _dedupe       — confidence boost logic
-7. fingerprint_asset integration — WordPress signals fixture
-8. SAN hostname scoping
-9. Pipeline fingerprint phase (mock probe)
+1.  parse_headers — 14 cases
+2.  parse_cookies — 16 cases
+3.  parse_body    — 18 cases (12 original + 3 Phase-3.1 + 3 Phase-3.2 regression)
+4.  parse_tls     — 6 cases
+5.  favicon_hash  — stability test
+6.  _dedupe       — corroboration + P1 drop logic
+7.  fingerprint_asset integration — WordPress signals fixture
+8.  SAN hostname scoping
+9.  Pipeline fingerprint phase (mock probe)
+10. Principle tests — 8 new tests for P1–P5
 """
 
 from __future__ import annotations
@@ -30,7 +31,12 @@ from bounty.fingerprint.cookies import parse_cookies
 from bounty.fingerprint.favicon import favicon_hash, lookup_favicon_db
 from bounty.fingerprint.headers import parse_headers
 from bounty.fingerprint.tls import parse_tls
-from bounty.fingerprint import _dedupe, fingerprint_asset
+from bounty.fingerprint import (
+    _apply_category_exclusion,
+    _apply_vendor_overrides,
+    _dedupe,
+    fingerprint_asset,
+)
 from bounty.models import Asset, FingerprintResult, ProbeResult, TLSInfo
 
 # ============================================================================
@@ -84,59 +90,70 @@ def _tech_set(results: list[FingerprintResult]) -> set[str]:
 class TestParseHeaders:
     def test_nginx_with_version(self) -> None:
         rs = parse_headers({"Server": "nginx/1.23.4"})
-        assert any(r.tech == "nginx" and r.version == "1.23.4" and r.confidence == 90 for r in rs)
+        assert any(r.tech == "nginx" and r.version == "1.23.4" and r.confidence == "definitive" for r in rs)
+
+    def test_nginx_without_version_is_strong(self) -> None:
+        rs = parse_headers({"Server": "nginx"})
+        assert any(r.tech == "nginx" and r.version is None and r.confidence == "strong" for r in rs)
 
     def test_apache_with_version(self) -> None:
         rs = parse_headers({"Server": "Apache/2.4.57 (Ubuntu)"})
-        assert any(r.tech == "apache" and r.version == "2.4.57" for r in rs)
+        assert any(r.tech == "apache" and r.version == "2.4.57" and r.confidence == "definitive" for r in rs)
 
     def test_iis_server(self) -> None:
         rs = parse_headers({"Server": "Microsoft-IIS/10.0"})
-        assert any(r.tech == "iis" and r.version == "10.0" for r in rs)
+        assert any(r.tech == "iis" and r.version == "10.0" and r.confidence == "definitive" for r in rs)
 
     def test_cloudflare_server(self) -> None:
         rs = parse_headers({"Server": "cloudflare"})
-        assert any(r.tech == "cloudflare" and r.category == "cdn" for r in rs)
+        assert any(r.tech == "cloudflare" and r.category == "cdn" and r.confidence == "strong" for r in rs)
 
-    def test_cf_ray_cdn(self) -> None:
+    def test_cf_ray_cdn_is_definitive(self) -> None:
         rs = parse_headers({"CF-Ray": "8abc123-LHR"})
-        assert any(r.tech == "cloudflare" and r.category == "cdn" for r in rs)
+        assert any(r.tech == "cloudflare" and r.category == "cdn" and r.confidence == "definitive" for r in rs)
 
-    def test_x_powered_by_php(self) -> None:
+    def test_x_powered_by_php_with_version(self) -> None:
         rs = parse_headers({"X-Powered-By": "PHP/8.2.0"})
-        assert any(r.tech == "php" and r.version == "8.2.0" and r.category == "language" for r in rs)
+        assert any(r.tech == "php" and r.version == "8.2.0" and r.confidence == "definitive" for r in rs)
 
     def test_x_powered_by_aspnet(self) -> None:
         rs = parse_headers({"X-Powered-By": "ASP.NET"})
-        assert any(r.tech == "asp.net" for r in rs)
+        assert any(r.tech == "asp.net" and r.confidence == "strong" for r in rs)
 
     def test_x_aspnet_version(self) -> None:
         rs = parse_headers({"X-AspNet-Version": "4.0.30319"})
-        assert any(r.tech == "asp.net" and r.version == "4.0.30319" for r in rs)
+        assert any(r.tech == "asp.net" and r.version == "4.0.30319" and r.confidence == "definitive" for r in rs)
 
     def test_x_generator_drupal(self) -> None:
         rs = parse_headers({"X-Generator": "Drupal 9 (https://www.drupal.org)"})
-        assert any(r.tech == "drupal" and r.version == "9" for r in rs)
+        assert any(r.tech == "drupal" and r.version == "9" and r.confidence == "definitive" for r in rs)
 
     def test_x_amz_cf_id_cloudfront(self) -> None:
         rs = parse_headers({"X-Amz-Cf-Id": "12345abcde"})
-        assert any(r.tech == "cloudfront" and r.category == "cdn" for r in rs)
+        assert any(r.tech == "cloudfront" and r.category == "cdn" and r.confidence == "definitive" for r in rs)
 
     def test_via_fastly(self) -> None:
         rs = parse_headers({"Via": "1.1 varnish (Fastly)"})
-        assert any(r.tech == "fastly" for r in rs)
+        assert any(r.tech == "fastly" and r.confidence == "strong" for r in rs)
 
     def test_werkzeug_flask_hint(self) -> None:
         rs = parse_headers({"Server": "Werkzeug/3.0.1 Python/3.11.0"})
-        assert any(r.tech == "werkzeug" and r.category == "framework" for r in rs)
+        assert any(r.tech == "werkzeug" and r.category == "framework" and r.confidence == "definitive" for r in rs)
 
     def test_header_case_insensitive_keys(self) -> None:
-        """Header dict keys are case-normalised inside parse_headers."""
         rs = parse_headers({"server": "nginx/1.24.0"})
-        assert any(r.tech == "nginx" for r in rs)
+        assert any(r.tech == "nginx" and r.confidence == "definitive" for r in rs)
 
     def test_empty_headers(self) -> None:
         assert parse_headers({}) == []
+
+    def test_evidence_format_is_header_prefix(self) -> None:
+        """Evidence must start with 'header:' per Principle 5."""
+        rs = parse_headers({"Server": "nginx/1.23.4"})
+        nginx_r = next((r for r in rs if r.tech == "nginx"), None)
+        assert nginx_r is not None
+        assert nginx_r.evidence.startswith("header:")
+        assert "=" in nginx_r.evidence
 
 
 # ============================================================================
@@ -144,67 +161,65 @@ class TestParseHeaders:
 # ============================================================================
 
 class TestParseCookies:
-    def test_phpsessid(self) -> None:
+    def test_phpsessid_is_weak(self) -> None:
         rs = parse_cookies(["PHPSESSID=abc123; Path=/; HttpOnly"])
-        assert any(r.tech == "php" and r.confidence == 70 for r in rs)
+        assert any(r.tech == "php" and r.confidence == "weak" for r in rs)
 
-    def test_jsessionid(self) -> None:
+    def test_jsessionid_is_weak(self) -> None:
         rs = parse_cookies(["JSESSIONID=ABCDEF; Path=/"])
-        assert any(r.tech == "java" and r.confidence == 60 for r in rs)
+        assert any(r.tech == "java" and r.confidence == "weak" for r in rs)
 
-    def test_aspnet_session(self) -> None:
+    def test_aspnet_session_is_strong(self) -> None:
         rs = parse_cookies(["ASP.NET_SessionId=xyz; HttpOnly"])
-        assert any(r.tech == "asp.net" and r.confidence == 80 for r in rs)
+        assert any(r.tech == "asp.net" and r.confidence == "strong" for r in rs)
 
-    def test_laravel_session(self) -> None:
+    def test_laravel_session_is_definitive(self) -> None:
         rs = parse_cookies(["laravel_session=abc; Path=/; HttpOnly; SameSite=Lax"])
-        assert any(r.tech == "laravel" and r.confidence == 90 for r in rs)
+        assert any(r.tech == "laravel" and r.confidence == "definitive" for r in rs)
 
     def test_symfony(self) -> None:
         rs = parse_cookies(["sf_redirect=%7B%22_route%22%3A%22home%22%7D"])
-        assert any(r.tech == "symfony" for r in rs)
+        assert any(r.tech == "symfony" and r.confidence == "strong" for r in rs)
 
     def test_connect_sid_express(self) -> None:
         rs = parse_cookies(["connect.sid=s%3Aabc.XYZ; Path=/; HttpOnly"])
-        assert any(r.tech == "express" for r in rs)
+        assert any(r.tech == "express" and r.confidence == "strong" for r in rs)
 
-    def test_wordpress_logged_in(self) -> None:
+    def test_wordpress_logged_in_is_definitive(self) -> None:
         rs = parse_cookies(["wordpress_logged_in_abcdef=user; Path=/"])
-        assert any(r.tech == "wordpress" and r.confidence == 90 for r in rs)
+        assert any(r.tech == "wordpress" and r.confidence == "definitive" for r in rs)
 
     def test_drupal_sess(self) -> None:
-        # 32 hex chars after SESS
         rs = parse_cookies(["SESS" + "a" * 32 + "=xyz"])
-        assert any(r.tech == "drupal" for r in rs)
+        assert any(r.tech == "drupal" and r.confidence == "strong" for r in rs)
 
-    def test_shopify_token(self) -> None:
+    def test_shopify_token_is_definitive(self) -> None:
         rs = parse_cookies(["SHOP_SESSION_TOKEN=xyz; Path=/; Secure"])
-        assert any(r.tech == "shopify" and r.confidence == 90 for r in rs)
+        assert any(r.tech == "shopify" and r.confidence == "definitive" for r in rs)
 
-    def test_cloudflare_bm(self) -> None:
+    def test_cloudflare_bm_is_definitive(self) -> None:
         rs = parse_cookies(["__cf_bm=abc.0.def; Path=/; Secure; HttpOnly"])
-        assert any(r.tech == "cloudflare" and r.category == "cdn" for r in rs)
+        assert any(r.tech == "cloudflare" and r.category == "cdn" and r.confidence == "definitive" for r in rs)
 
-    def test_imperva(self) -> None:
+    def test_imperva_is_definitive(self) -> None:
         rs = parse_cookies(["incap_ses_123_456=abc; Path=/"])
-        assert any(r.tech == "imperva" and r.category == "waf" for r in rs)
+        assert any(r.tech == "imperva" and r.category == "waf" and r.confidence == "definitive" for r in rs)
 
     def test_django_requires_both(self) -> None:
-        # Only csrftoken — no django detection
         rs = parse_cookies(["csrftoken=abc"])
         assert not any(r.tech == "django" for r in rs)
 
-    def test_django_both_cookies(self) -> None:
+    def test_django_both_cookies_is_strong(self) -> None:
         rs = parse_cookies(["csrftoken=abc", "sessionid=xyz"])
-        assert any(r.tech == "django" and r.confidence == 85 for r in rs)
+        assert any(r.tech == "django" and r.confidence == "strong" for r in rs)
 
-    def test_xsrf_token_ambiguous(self) -> None:
+    def test_xsrf_token_is_hint(self) -> None:
         rs = parse_cookies(["XSRF-TOKEN=abc123"])
-        assert any(r.tech == "laravel-or-angular" and r.confidence == 50 for r in rs)
+        assert any(r.tech == "laravel-or-angular" and r.confidence == "hint" for r in rs)
 
-    def test_aws_elb(self) -> None:
+    def test_aws_elb_is_strong(self) -> None:
         rs = parse_cookies(["AWSALB=xyz; Expires=Thu, 14 Dec 2023 06:37:46 GMT"])
-        assert any(r.tech == "aws-elb" for r in rs)
+        assert any(r.tech == "aws-elb" and r.confidence == "strong" for r in rs)
 
     def test_empty_cookies(self) -> None:
         assert parse_cookies([]) == []
@@ -221,82 +236,76 @@ class TestParseBody:
     def test_skips_image(self) -> None:
         assert parse_body(b"\x89PNG", "image/png", "https://example.com") == []
 
-    def test_meta_generator_wordpress(self) -> None:
+    def test_meta_generator_wordpress_is_definitive(self) -> None:
         html = b'<meta name="generator" content="WordPress 6.4.2" />'
         rs = parse_body(html, "text/html", "https://example.com")
-        assert any(r.tech == "wordpress" and r.version == "6.4.2" and r.confidence == 95 for r in rs)
+        assert any(r.tech == "wordpress" and r.version == "6.4.2" and r.confidence == "definitive" for r in rs)
+        assert any("meta:generator=" in r.evidence for r in rs if r.tech == "wordpress")
 
-    def test_meta_generator_drupal(self) -> None:
+    def test_meta_generator_drupal_is_definitive(self) -> None:
         html = b'<html><head><meta name="generator" content="Drupal 9"></head></html>'
         rs = parse_body(html, "text/html", "https://example.com")
-        assert any(r.tech == "drupal" and r.confidence == 95 for r in rs)
+        assert any(r.tech == "drupal" and r.confidence == "definitive" for r in rs)
 
-    def test_wp_content_path(self) -> None:
+    def test_wp_content_path_is_strong(self) -> None:
         html = b'<script src="/wp-content/themes/main.js"></script>'
         rs = parse_body(html, "text/html", "https://example.com")
-        assert any(r.tech == "wordpress" for r in rs)
+        assert any(r.tech == "wordpress" and r.confidence == "strong" for r in rs)
 
-    def test_next_static_path(self) -> None:
+    def test_next_static_path_is_definitive(self) -> None:
         html = b'<script src="/_next/static/chunks/main.js"></script>'
         rs = parse_body(html, "text/html", "https://example.com")
-        assert any(r.tech == "nextjs" and r.confidence == 90 for r in rs)
+        assert any(r.tech == "nextjs" and r.confidence == "definitive" for r in rs)
 
-    def test_next_data_script(self) -> None:
+    def test_next_data_script_is_definitive(self) -> None:
         html = b'<script id="__NEXT_DATA__" type="application/json">{"page":"/"}</script>'
         rs = parse_body(html, "text/html; charset=utf-8", "https://example.com")
-        assert any(r.tech == "nextjs" and r.confidence == 95 for r in rs)
+        assert any(r.tech == "nextjs" and r.confidence == "definitive" for r in rs)
 
-    def test_shopify_comment(self) -> None:
+    def test_shopify_comment_is_strong(self) -> None:
         html = b"<!-- Powered by Shopify -->"
         rs = parse_body(html, "text/html", "https://example.com")
-        assert any(r.tech == "shopify" and r.confidence == 80 for r in rs)
+        assert any(r.tech == "shopify" and r.confidence == "strong" for r in rs)
 
-    def test_title_phpinfo(self) -> None:
+    def test_title_phpinfo_is_definitive(self) -> None:
         html = b"<html><head><title>phpinfo()</title></head></html>"
         rs = parse_body(html, "text/html", "https://example.com")
-        assert any(r.tech == "phpinfo-exposed" and r.confidence == 100 for r in rs)
+        assert any(r.tech == "phpinfo-exposed" and r.confidence == "definitive" for r in rs)
 
-    def test_title_dir_listing(self) -> None:
+    def test_title_dir_listing_is_definitive(self) -> None:
         html = b"<html><head><title>Index of /secret</title></head><body></body></html>"
         rs = parse_body(html, "text/html", "https://example.com")
-        assert any(r.tech == "directory-listing" and r.confidence == 95 for r in rs)
+        assert any(r.tech == "directory-listing" and r.confidence == "definitive" for r in rs)
 
-    def test_title_jenkins(self) -> None:
+    def test_title_jenkins_is_strong(self) -> None:
         html = b"<html><head><title>Dashboard [Jenkins]</title></head></html>"
         rs = parse_body(html, "text/html", "https://example.com")
-        assert any(r.tech == "jenkins" and r.confidence >= 90 for r in rs)
+        assert any(r.tech == "jenkins" and r.confidence == "strong" for r in rs)
 
     def test_angular_ng_app(self) -> None:
         html = b'<div ng-app="myApp"><div ng-controller="ctrl"></div></div>'
         rs = parse_body(html, "text/html", "https://example.com")
-        assert any(r.tech == "angularjs" for r in rs)
+        assert any(r.tech == "angularjs" and r.confidence == "strong" for r in rs)
 
     def test_empty_body(self) -> None:
         assert parse_body(b"", "text/html", "https://example.com") == []
 
-    # ── BUG 1 regression — Magento false positive on Drupal sites ─────────
+    # ── Phase-3.1 regressions ──────────────────────────────────────────────
 
-    def test_magento_fp_drupal_body_classes(self) -> None:
+    def test_magento_fp_drupal_body_classes_no_detect(self) -> None:
         """Drupal body classes ('page-node', 'cms-front') must NOT trigger Magento."""
         html = b'<html><body class="page-node cms-front layout-no-sidebars"><p>Drupal</p></body></html>'
         rs = parse_body(html, "text/html", "https://example.com")
-        assert not any(r.tech == "magento" for r in rs), (
-            "Magento should NOT be detected from generic 'page-' / 'cms-' body classes"
-        )
+        assert not any(r.tech == "magento" for r in rs)
 
     def test_magento_tp_catalog_product_class(self) -> None:
-        """A real Magento body class ('catalog-product-view') MUST trigger Magento."""
+        """A real Magento body class ('catalog-product-view') MUST trigger Magento at WEAK."""
         html = b'<html><body class="catalog-product-view category-bag"><p>Magento</p></body></html>'
         rs = parse_body(html, "text/html", "https://example.com")
-        assert any(r.tech == "magento" for r in rs), (
-            "Magento SHOULD be detected from 'catalog-product-view' body class"
-        )
-
-    # ── BUG 2 regression — Zendesk suppress Rails over-detection ──────────
+        assert any(r.tech == "magento" and r.confidence == "weak" for r in rs)
 
     def test_zendesk_detection_suppresses_rails_hotwire(self) -> None:
-        """When Zendesk is detected (zendesk.com script src), rails-hotwire
-        must NOT be emitted even if data-turbo is present."""
+        """When Zendesk is detected (zendesk.com script src), rails-hotwire must NOT be emitted."""
         html = (
             b'<html><head>'
             b'<script src="https://static.zdassets.com/zendesk.com/assets/main.js"></script>'
@@ -304,10 +313,8 @@ class TestParseBody:
         )
         rs = parse_body(html, "text/html", "https://docs.example.com")
         techs = {r.tech for r in rs}
-        assert "zendesk" in techs, "Zendesk should be detected via zendesk.com script src"
-        assert "rails-hotwire" not in techs, (
-            "rails-hotwire must be suppressed when Zendesk is already detected"
-        )
+        assert "zendesk" in techs
+        assert "rails-hotwire" not in techs
 
 
 # ============================================================================
@@ -318,38 +325,38 @@ class TestParseTls:
     def _asset(self) -> Asset:
         return _make_asset("example.com")
 
-    def test_self_signed(self) -> None:
+    def test_self_signed_is_definitive(self) -> None:
         tls = TLSInfo(issuer="CN=example.com", subject="CN=example.com")
         probe = _make_probe(tls=tls)
         rs, hosts = parse_tls(probe, self._asset())
-        assert any(r.tech == "self-signed-cert" and r.confidence == 90 for r in rs)
+        assert any(r.tech == "self-signed-cert" and r.confidence == "definitive" for r in rs)
+        assert any(r.evidence.startswith("tls:") for r in rs if r.tech == "self-signed-cert")
 
-    def test_lets_encrypt(self) -> None:
+    def test_lets_encrypt_is_strong(self) -> None:
         tls = TLSInfo(issuer="C=US, O=Let's Encrypt, CN=R3", subject="CN=example.com")
         probe = _make_probe(tls=tls)
         rs, _ = parse_tls(probe, self._asset())
-        assert any(r.tech == "lets-encrypt" for r in rs)
+        assert any(r.tech == "lets-encrypt" and r.confidence == "strong" for r in rs)
 
-    def test_cert_expired(self) -> None:
+    def test_cert_expired_is_definitive(self) -> None:
         expired = (datetime.now(tz=timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
         tls = TLSInfo(issuer="CN=CA", subject="CN=example.com", not_after=expired)
         probe = _make_probe(tls=tls)
         rs, _ = parse_tls(probe, self._asset())
-        assert any(r.tech == "cert-expired" and r.confidence == 100 for r in rs)
+        assert any(r.tech == "cert-expired" and r.confidence == "definitive" for r in rs)
 
-    def test_cert_expiring_soon(self) -> None:
+    def test_cert_expiring_soon_is_strong(self) -> None:
         soon = (datetime.now(tz=timezone.utc) + timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
         tls = TLSInfo(issuer="CN=CA", subject="CN=example.com", not_after=soon)
         probe = _make_probe(tls=tls)
         rs, _ = parse_tls(probe, self._asset())
-        assert any(r.tech == "cert-expiring-soon" and r.confidence >= 90 for r in rs)
+        assert any(r.tech == "cert-expiring-soon" and r.confidence == "strong" for r in rs)
 
     def test_valid_commercial_cert(self) -> None:
         future = (datetime.now(tz=timezone.utc) + timedelta(days=300)).strftime("%Y-%m-%dT%H:%M:%SZ")
         tls = TLSInfo(issuer="CN=DigiCert", subject="CN=example.com", not_after=future)
         probe = _make_probe(tls=tls)
         rs, _ = parse_tls(probe, self._asset())
-        # No cert-expired or cert-expiring-soon
         assert not any(r.tech in ("cert-expired", "cert-expiring-soon") for r in rs)
 
     def test_no_tls(self) -> None:
@@ -378,53 +385,100 @@ class TestFaviconHash:
 
 
 # ============================================================================
-# 6. Deduplication + confidence boost
+# 6. Deduplication — Principle 1 + Principle 4
 # ============================================================================
 
 class TestDedupeBoost:
-    def test_single_signal_no_boost(self) -> None:
-        results = [FingerprintResult(tech="nginx", category="web-server", confidence=90)]
+    def test_single_strong_signal_no_change(self) -> None:
+        results = [FingerprintResult(tech="nginx", category="web-server", confidence="strong")]
         merged = _dedupe(results)
         assert len(merged) == 1
-        assert merged[0].confidence == 90
+        assert merged[0].confidence == "strong"
 
-    def test_two_signals_boost_10(self) -> None:
+    def test_two_weak_signals_upgrade_to_strong(self) -> None:
+        """P4: two WEAK at same tier → upgrade ONE step to STRONG."""
         results = [
-            FingerprintResult(tech="nginx", category="web-server", confidence=70, evidence="server header"),
-            FingerprintResult(tech="nginx", category="web-server", confidence=60, evidence="via header"),
+            FingerprintResult(tech="nginx", category="web-server", confidence="weak",
+                              evidence="header:server=nginx"),
+            FingerprintResult(tech="nginx", category="web-server", confidence="weak",
+                              evidence="body:script=nginx-marker"),
         ]
         merged = _dedupe(results)
         assert len(merged) == 1
-        assert merged[0].confidence == 80  # max(70,60) + 10
-        assert "server header" in merged[0].evidence
-        assert "via header" in merged[0].evidence
+        assert merged[0].confidence == "strong"
+        assert "header:server=nginx" in merged[0].evidence
+        assert "body:script=nginx-marker" in merged[0].evidence
 
-    def test_three_signals_boost_20(self) -> None:
+    def test_three_weak_signals_still_only_strong(self) -> None:
+        """P4: three WEAK → STRONG (one-tier upgrade, no double-jump)."""
         results = [
-            FingerprintResult(tech="wordpress", category="cms", confidence=80, evidence="path"),
-            FingerprintResult(tech="wordpress", category="cms", confidence=70, evidence="cookie"),
-            FingerprintResult(tech="wordpress", category="cms", confidence=60, evidence="meta"),
+            FingerprintResult(tech="wordpress", category="cms", confidence="weak",
+                              evidence="body:path=/wp-content/"),
+            FingerprintResult(tech="wordpress", category="cms", confidence="weak",
+                              evidence="cookie:wp-settings-"),
+            FingerprintResult(tech="wordpress", category="cms", confidence="weak",
+                              evidence="meta:generator=WordPress"),
         ]
         merged = _dedupe(results)
         assert len(merged) == 1
-        assert merged[0].confidence == 100  # min(100, 80+20)
+        assert merged[0].confidence == "strong"  # NOT definitive — no double-jump per P4
 
-    def test_cap_at_100(self) -> None:
+    def test_two_strong_signals_upgrade_to_definitive(self) -> None:
+        """P4: two STRONG at same tier → upgrade to DEFINITIVE."""
         results = [
-            FingerprintResult(tech="drupal", category="cms", confidence=95),
-            FingerprintResult(tech="drupal", category="cms", confidence=90),
+            FingerprintResult(tech="drupal", category="cms", confidence="strong",
+                              evidence="header:x-drupal-cache=HIT"),
+            FingerprintResult(tech="drupal", category="cms", confidence="strong",
+                              evidence="body:path=/sites/default/"),
         ]
         merged = _dedupe(results)
-        assert merged[0].confidence == 100
+        assert len(merged) == 1
+        assert merged[0].confidence == "definitive"
+
+    def test_definitive_absorbs_weaker(self) -> None:
+        """P4: DEFINITIVE + WEAK → stays DEFINITIVE (absorbs weaker)."""
+        results = [
+            FingerprintResult(tech="drupal", category="cms", confidence="definitive"),
+            FingerprintResult(tech="drupal", category="cms", confidence="weak"),
+        ]
+        merged = _dedupe(results)
+        assert merged[0].confidence == "definitive"
 
     def test_different_techs_kept_separate(self) -> None:
         results = [
-            FingerprintResult(tech="nginx", category="web-server", confidence=90),
-            FingerprintResult(tech="php", category="language", confidence=90),
+            FingerprintResult(tech="nginx", category="web-server", confidence="strong"),
+            FingerprintResult(tech="php", category="language", confidence="strong"),
         ]
         merged = _dedupe(results)
         assert len(merged) == 2
         assert _tech_set(merged) == {"nginx", "php"}
+
+    def test_single_hint_is_dropped(self) -> None:
+        """P1: a single HINT signal is always dropped."""
+        results = [FingerprintResult(tech="rails", category="framework", confidence="hint")]
+        merged = _dedupe(results)
+        assert merged == []
+
+    def test_single_weak_is_dropped(self) -> None:
+        """P1: an uncorroborated WEAK signal is always dropped."""
+        results = [FingerprintResult(tech="magento", category="cms", confidence="weak",
+                                     evidence="body:class=catalog-product-view")]
+        merged = _dedupe(results)
+        assert merged == []
+
+    def test_weak_corroborated_by_hint_survives(self) -> None:
+        """P1: WEAK + HINT (same tech) → WEAK survives (corroborated by 2nd signal)."""
+        results = [
+            FingerprintResult(tech="rails", category="framework", confidence="weak",
+                              evidence="cookie:_session_id"),
+            FingerprintResult(tech="rails", category="framework", confidence="hint",
+                              evidence="header:x-runtime=0.045"),
+        ]
+        merged = _dedupe(results)
+        # WEAK is best tier; only 1 signal at WEAK tier → no boost; len=2 → corroborated
+        assert len(merged) == 1
+        assert merged[0].confidence == "weak"
+        assert merged[0].tech == "rails"
 
 
 # ============================================================================
@@ -442,7 +496,6 @@ async def test_fingerprint_asset_integration() -> None:
         init_db(db_path)
         apply_migrations(db_path)
 
-        # Insert program + asset rows
         async with aiosqlite.connect(db_path) as conn:
             conn.row_factory = aiosqlite.Row
             await conn.execute("PRAGMA foreign_keys = ON")
@@ -461,7 +514,6 @@ async def test_fingerprint_asset_integration() -> None:
             )
             await conn.commit()
 
-        # Build a probe result with WordPress + PHP + nginx signals
         html = (
             b'<html><head>'
             b'<meta name="generator" content="WordPress 6.4" />'
@@ -481,7 +533,6 @@ async def test_fingerprint_asset_integration() -> None:
 
         asset = _make_asset("example.com", "A1", "p1")
 
-        # Mock probe_fn (favicon fetch will fail → gracefully skipped)
         async def mock_probe(url: str) -> ProbeResult:
             return ProbeResult(
                 url=url, final_url=url, status_code=404,
@@ -498,15 +549,18 @@ async def test_fingerprint_asset_integration() -> None:
         assert "php" in tech_names, f"Expected php in {tech_names}"
         assert "nginx" in tech_names, f"Expected nginx in {tech_names}"
 
-        # Check DB rows were persisted
         async with aiosqlite.connect(db_path) as conn:
             conn.row_factory = aiosqlite.Row
-            cur = await conn.execute("SELECT tech FROM fingerprints WHERE asset_id='A1'")
-            db_techs = {r["tech"] for r in await cur.fetchall()}
+            cur = await conn.execute("SELECT tech, confidence FROM fingerprints WHERE asset_id='A1'")
+            rows = await cur.fetchall()
+        db_techs = {r["tech"] for r in rows}
         assert "wordpress" in db_techs
         assert "nginx" in db_techs
+        # Confidence values should be tier strings now
+        conf_vals = {r["confidence"] for r in rows}
+        assert conf_vals <= {"definitive", "strong", "weak", "hint"}, \
+            f"Unexpected confidence values in DB: {conf_vals}"
 
-        # Asset.server should be updated to nginx
         async with aiosqlite.connect(db_path) as conn:
             conn.row_factory = aiosqlite.Row
             cur = await conn.execute("SELECT server FROM assets WHERE id='A1'")
@@ -524,7 +578,6 @@ class TestSanHostnames:
         return _make_asset(host)
 
     def test_san_same_domain_extracted(self) -> None:
-        """SANs with same root domain are returned."""
         tls = TLSInfo(
             issuer="CN=CA",
             subject="DNS:example.com, DNS:www.example.com, DNS:api.example.com",
@@ -534,7 +587,6 @@ class TestSanHostnames:
         assert "api.example.com" in hosts or "www.example.com" in hosts
 
     def test_san_cross_domain_filtered(self) -> None:
-        """SANs from a different root domain are not returned."""
         tls = TLSInfo(
             issuer="CN=CA",
             subject="DNS:other.org, DNS:api.other.org",
@@ -555,7 +607,7 @@ class TestSanHostnames:
 
 @pytest.mark.asyncio
 async def test_pipeline_fingerprint_phase() -> None:
-    """Full pipeline with mocked probe produces fingerprint rows."""
+    """Full pipeline with mocked probe produces fingerprint rows with tier confidence."""
     import aiosqlite
     from bounty.db import init_db, apply_migrations
     from bounty.models import Target
@@ -615,14 +667,15 @@ async def test_pipeline_fingerprint_phase() -> None:
 
         assert result["assets"], "Expected at least one asset"
 
-        # Verify fingerprint rows exist
         async with aiosqlite.connect(db_path) as conn:
             conn.row_factory = aiosqlite.Row
-            cur = await conn.execute("SELECT COUNT(*) as cnt FROM fingerprints")
-            row = await cur.fetchone()
-            assert row is not None
-            count = row["cnt"]
-        assert count > 0, "Expected fingerprint rows after pipeline"
+            cur = await conn.execute("SELECT tech, confidence FROM fingerprints")
+            rows = await cur.fetchall()
+        assert len(rows) > 0, "Expected fingerprint rows after pipeline"
+        # All fingerprints must use tier strings
+        for row in rows:
+            assert row["confidence"] in ("definitive", "strong", "weak", "hint"), \
+                f"Invalid confidence tier: {row['confidence']}"
 
 
 async def _aiter(items: list[str]) -> Any:
@@ -631,5 +684,128 @@ async def _aiter(items: list[str]) -> Any:
         yield item
 
 
+# ============================================================================
+# 10. Principle tests (8 required by Phase 3.2 spec)
+# ============================================================================
 
+class TestPrinciples:
 
+    def test_weak_signal_alone_is_dropped(self) -> None:
+        """P1: a single WEAK signal with no corroboration is dropped from dedup output."""
+        results = [
+            FingerprintResult(tech="magento", category="cms", confidence="weak",
+                              evidence="body:class=catalog-product-view")
+        ]
+        merged = _dedupe(results)
+        assert merged == [], "Uncorroborated WEAK must be dropped (Principle 1)"
+
+    def test_weak_signal_with_corroboration_survives(self) -> None:
+        """P1: WEAK + HINT (same tech) → WEAK survives because it's corroborated."""
+        results = [
+            FingerprintResult(tech="rails", category="framework", confidence="weak",
+                              evidence="cookie:_session_id"),
+            FingerprintResult(tech="rails", category="framework", confidence="hint",
+                              evidence="header:x-runtime=0.050"),
+        ]
+        merged = _dedupe(results)
+        assert len(merged) == 1
+        assert merged[0].tech == "rails"
+        assert merged[0].confidence == "weak"  # no boost since only 1 WEAK; but corroborated so survives
+
+    def test_same_category_definitive_collision_demotes_loser(self) -> None:
+        """P2: two DEFINITIVE CMS detections → first keeps DEFINITIVE, second demoted to STRONG."""
+        drupal = FingerprintResult(tech="drupal", category="cms", confidence="definitive",
+                                   evidence="header:x-generator=Drupal 9")
+        wordpress = FingerprintResult(tech="wordpress", category="cms", confidence="definitive",
+                                      evidence="meta:generator=WordPress")
+        out = _apply_category_exclusion([drupal, wordpress])
+        techs_by_conf = {r.tech: r.confidence for r in out}
+        assert "drupal" in techs_by_conf
+        assert "wordpress" in techs_by_conf
+        assert techs_by_conf["drupal"] == "definitive"
+        assert techs_by_conf["wordpress"] == "strong"  # demoted
+
+    def test_drupal_definitive_suppresses_magento_weak(self) -> None:
+        """P2: Drupal DEFINITIVE in cms category suppresses Magento WEAK in same category."""
+        drupal = FingerprintResult(tech="drupal", category="cms", confidence="definitive",
+                                   evidence="header:x-generator=Drupal 9")
+        magento = FingerprintResult(tech="magento", category="cms", confidence="weak",
+                                    evidence="body:class=catalog-product-view")
+        out = _apply_category_exclusion([drupal, magento])
+        techs = {r.tech for r in out}
+        assert "drupal" in techs
+        assert "magento" not in techs, "WEAK Magento must be suppressed by DEFINITIVE Drupal (P2)"
+
+    def test_zendesk_vendor_override_suppresses_rails(self) -> None:
+        """P3: Zendesk at STRONG+ suppresses rails-hotwire via vendor override table."""
+        zendesk = FingerprintResult(tech="zendesk", category="other", confidence="strong",
+                                    evidence="body:zendesk-src")
+        rails = FingerprintResult(tech="rails-hotwire", category="framework", confidence="hint",
+                                  evidence="body:script=data-turbo")
+        php = FingerprintResult(tech="php", category="language", confidence="strong",
+                                evidence="header:x-powered-by=PHP/8.1")
+        out = _apply_vendor_overrides([zendesk, rails, php])
+        techs = {r.tech for r in out}
+        assert "zendesk" in techs
+        assert "rails-hotwire" not in techs, "rails-hotwire must be suppressed by zendesk vendor override"
+        assert "php" in techs  # unrelated tech unaffected
+
+    def test_github_pages_suppresses_cms_detections(self) -> None:
+        """P3: GitHub detection suppresses CMS category detections (hosted static content)."""
+        github = FingerprintResult(tech="github", category="other", confidence="strong",
+                                   evidence="header:x-github-request-id=abc123")
+        wordpress = FingerprintResult(tech="wordpress", category="cms", confidence="strong",
+                                      evidence="body:path=/wp-content/")
+        drupal = FingerprintResult(tech="drupal", category="cms", confidence="weak",
+                                   evidence="body:class=drupal")
+        out = _apply_vendor_overrides([github, wordpress, drupal])
+        techs = {r.tech for r in out}
+        assert "github" in techs
+        assert "wordpress" not in techs, "CMS detections must be suppressed on GitHub-served assets"
+        assert "drupal" not in techs
+
+    def test_corroboration_upgrades_one_tier_not_two(self) -> None:
+        """P4: three same-tier WEAK signals → STRONG (one tier up), NOT DEFINITIVE (no double-jump)."""
+        results = [
+            FingerprintResult(tech="nginx", category="web-server", confidence="weak",
+                              evidence="header:server=nginx"),
+            FingerprintResult(tech="nginx", category="web-server", confidence="weak",
+                              evidence="body:path=/nginx_status"),
+            FingerprintResult(tech="nginx", category="web-server", confidence="weak",
+                              evidence="body:title=welcome to nginx"),
+        ]
+        merged = _dedupe(results)
+        assert len(merged) == 1
+        assert merged[0].confidence == "strong", (
+            "Three WEAK signals → STRONG (one-tier upgrade), not DEFINITIVE"
+        )
+
+    def test_evidence_format_is_structured_per_source(self) -> None:
+        """P5: evidence strings must use the 'source:key=value' structured format."""
+        # Headers
+        rs = parse_headers({"Server": "nginx/1.23.4"})
+        nginx_r = next((r for r in rs if r.tech == "nginx"), None)
+        assert nginx_r is not None
+        assert nginx_r.evidence.startswith("header:")
+        assert "=" in nginx_r.evidence
+
+        # Cookies
+        rs = parse_cookies(["laravel_session=abc"])
+        laravel_r = next((r for r in rs if r.tech == "laravel"), None)
+        assert laravel_r is not None
+        assert laravel_r.evidence.startswith("cookie:")
+
+        # Body — meta generator
+        html = b'<meta name="generator" content="WordPress 6.4" />'
+        rs = parse_body(html, "text/html", "https://example.com")
+        wp_r = next((r for r in rs if r.tech == "wordpress" and "generator" in r.evidence), None)
+        assert wp_r is not None
+        assert wp_r.evidence.startswith("meta:"), f"Expected meta:, got: {wp_r.evidence}"
+
+        # TLS
+        tls = TLSInfo(issuer="CN=example.com", subject="CN=example.com")
+        probe = _make_probe(tls=tls)
+        rs, _ = parse_tls(probe, _make_asset())
+        tls_r = next((r for r in rs if r.tech == "self-signed-cert"), None)
+        assert tls_r is not None
+        assert tls_r.evidence.startswith("tls:")
