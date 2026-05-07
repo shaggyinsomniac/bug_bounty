@@ -144,7 +144,7 @@ async def _smoke_recon_async(
         if asset_ids:
             placeholders = ",".join("?" * len(asset_ids))
             cursor = await conn.execute(
-                f"SELECT host, http_status, title, server, url FROM assets WHERE id IN ({placeholders}) ORDER BY http_status ASC, host ASC",
+                f"SELECT id, host, http_status, title, server, cdn, waf, url FROM assets WHERE id IN ({placeholders}) ORDER BY http_status ASC, host ASC",
                 asset_ids,
             )
             asset_rows = list(await cursor.fetchall())
@@ -241,10 +241,51 @@ def smoke_recon(
 
     typer.echo("")
     typer.echo(f"  ASSETS DISCOVERED: {len(asset_rows)}")
+
+    async def _get_fingerprints_for_assets(db_path: Path, asset_ids: list[str]) -> dict[str, list[dict[str, object]]]:
+        result: dict[str, list[dict[str, object]]] = {}
+        if not asset_ids:
+            return result
+        async with get_conn(db_path) as conn:
+            placeholders = ",".join("?" * len(asset_ids))
+            cur = await conn.execute(
+                f"SELECT asset_id, tech, category, confidence FROM fingerprints"
+                f" WHERE asset_id IN ({placeholders})"
+                f" ORDER BY asset_id, confidence DESC",
+                asset_ids,
+            )
+            for fp_row in await cur.fetchall():
+                result.setdefault(fp_row["asset_id"], []).append(dict(fp_row))
+        return result
+
+    fp_by_asset: dict[str, list[dict[str, object]]] = {}
+    if asset_rows:
+        fp_by_asset = asyncio.run(
+            _get_fingerprints_for_assets(db_path, [str(r["id"]) for r in asset_rows[:50]])
+        )
+
     for row in asset_rows[:50]:
         status_str = str(row["http_status"]) if row["http_status"] else "---"
-        title_str = (row["title"] or "")[:50]
-        typer.echo(f"    [{status_str:3s}] {row['host']:<40s}  {title_str}")
+        title_str = (row["title"] or "")[:40]
+        server_val = row["server"] if row["server"] else None
+        cdn_val = row["cdn"] if row["cdn"] else None
+        waf_val = row["waf"] if row["waf"] else None
+        server_str = f"  server={server_val}" if server_val else ""
+        cdn_str = f" cdn={cdn_val}" if cdn_val else ""
+        waf_str = f" waf={waf_val}" if waf_val else ""
+        typer.echo(f"    [{status_str:3s}] {row['host']:<40s}  {title_str}{server_str}{cdn_str}{waf_str}")
+
+        fps: list[dict[str, object]] = fp_by_asset.get(str(row["id"]), [])
+        if fps:
+            # Deduplicate by tech name (keep highest confidence)
+            seen_techs: dict[str, dict[str, object]] = {}
+            for fp in fps:
+                t = str(fp["tech"])
+                if t not in seen_techs or int(str(fp["confidence"])) > int(str(seen_techs[t]["confidence"])):
+                    seen_techs[t] = fp
+            top_fps = sorted(seen_techs.values(), key=lambda x: -int(str(x["confidence"])))[:5]
+            tech_strs = [f"{fp['tech']}({fp['category']},{fp['confidence']})" for fp in top_fps]
+            typer.echo(f"           techs: {',  '.join(tech_strs)}")
 
     if len(asset_rows) > 50:
         typer.echo(f"    … and {len(asset_rows) - 50} more")
@@ -951,6 +992,95 @@ def cleanup_orphan_assets_cmd(
 
     if not confirm:
         typer.echo("\nRe-run with --confirm to actually delete.")
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint sub-commands
+# ---------------------------------------------------------------------------
+
+fingerprint_app = typer.Typer(help="Fingerprint commands — query and manage technology detections.")
+app.add_typer(fingerprint_app, name="fingerprint")
+
+
+@fingerprint_app.command("show")
+def fingerprint_show(
+    asset_id: Annotated[str, typer.Argument(help="Asset ID (ULID)")],
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Print all FingerprintResult rows for an asset, sorted by confidence."""
+    from bounty.config import get_settings as _get_settings
+
+    db_path = db or _get_settings().db_path
+
+    async def _show(aid: str) -> list[dict[str, object]]:
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                """
+                SELECT id, tech, version, category, confidence, evidence, created_at
+                FROM fingerprints WHERE asset_id=?
+                ORDER BY confidence DESC
+                """,
+                (aid,),
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
+    try:
+        rows = asyncio.run(_show(asset_id))
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not rows:
+        typer.echo(f"No fingerprint rows found for asset {asset_id!r}.")
+        raise typer.Exit(0)
+
+    typer.echo(f"Fingerprints for asset {asset_id} ({len(rows)} results):")
+    typer.echo(f"  {'TECH':<30s}  {'CAT':<12s}  {'CONF':>4s}  {'VERSION':<12s}  EVIDENCE")
+    typer.echo("  " + "-" * 100)
+    for r in rows:
+        ver = (str(r.get("version") or ""))[:12]
+        ev = (str(r.get("evidence") or ""))[:60]
+        typer.echo(
+            f"  {str(r['tech']):<30s}  {str(r['category']):<12s}  "
+            f"{str(r['confidence']):>4s}  {ver:<12s}  {ev}"
+        )
+
+
+@fingerprint_app.command("add-favicon-hash")
+def fingerprint_add_favicon_hash(
+    tech: Annotated[str, typer.Argument(help="Tech name (e.g. jenkins)")],
+    hash_val: Annotated[int, typer.Argument(help="mmh3 favicon hash (integer)")],
+    category: Annotated[str, typer.Option("--category")] = "other",
+) -> None:
+    """Append or update a favicon hash entry in favicon_db.json."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    db_file = _Path(__file__).parent / "fingerprint" / "data" / "favicon_db.json"
+    try:
+        entries: list[dict[str, object]] = _json.loads(db_file.read_text())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] reading favicon_db.json: {exc}", err=True)
+        raise typer.Exit(1)
+
+    # Update existing entry or append new one
+    updated = False
+    for entry in entries:
+        if entry.get("tech") == tech:
+            entry["hash"] = hash_val
+            entry["category"] = category
+            updated = True
+            break
+    if not updated:
+        entries.append({"hash": hash_val, "tech": tech, "category": category})
+
+    db_file.write_text(_json.dumps(entries, indent=2))
+    verb = "Updated" if updated else "Added"
+    typer.echo(f"[bounty fingerprint add-favicon-hash] {verb} hash={hash_val} for tech={tech!r} (category={category})")
+
+    # Invalidate module cache
+    from bounty.fingerprint import favicon as _fav_module
+    _fav_module._FAVICON_DB = None
 
 
 if __name__ == "__main__":

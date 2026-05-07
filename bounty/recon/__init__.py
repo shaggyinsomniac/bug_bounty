@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,7 +35,8 @@ from bounty.config import get_settings
 from bounty.db import get_conn
 from bounty.events import publish
 from bounty.exceptions import ToolMissingError
-from bounty.models import Target
+from bounty.fingerprint import fingerprint_asset
+from bounty.models import Asset, Target
 from bounty.recon.http_probe import probe
 from bounty.recon.ip_ranges import expand_asn, expand_cidr, is_internal_ip
 from bounty.recon.port_scan import OpenPort, scan_ports
@@ -362,6 +364,99 @@ def _extract_title(body_text: str) -> str | None:
     import re  # local import to keep module-level imports clean
     m = re.search(r"<title[^>]*>([^<]{1,200})</title>", body_text, re.IGNORECASE)
     return m.group(1).strip() if m else None
+
+
+async def _run_fingerprint_phase(
+    db_path: Path,
+    program_id: str,
+    asset_ids: list[str],
+    probe_fn: Any,
+    bound_log: Any,
+) -> None:
+    """Run fingerprint_asset for every asset in ``asset_ids`` (concurrency=50).
+
+    Failures are logged as warnings and do NOT propagate — fingerprinting
+    failures must never fail an asset in the scan result.
+
+    Args:
+        db_path: Path to the SQLite database.
+        program_id: Program ID (used for SAN asset inserts).
+        asset_ids: Asset row IDs to fingerprint.
+        probe_fn: The ``probe`` callable from http_probe.
+        bound_log: Bound structlog logger.
+    """
+    import asyncio as _asyncio
+
+    favicon_cache: dict[str, tuple[int, str]] = {}
+    sem = _asyncio.Semaphore(50)
+
+    async def _fp_one(asset_id: str) -> None:
+        async with sem:
+            try:
+                async with get_conn(db_path) as conn:
+                    cursor = await conn.execute(
+                        "SELECT id, program_id, host, port, scheme, url, ip, status,"
+                        " http_status, title, server, cdn, waf, tls_issuer, tls_expiry,"
+                        " tags, seen_protocols, primary_scheme FROM assets WHERE id=?",
+                        (asset_id,),
+                    )
+                    row = await cursor.fetchone()
+                    if row is None:
+                        return
+
+                    import json as _json
+
+                    tags_raw = row["tags"] or "[]"
+                    try:
+                        tags: list[str] = _json.loads(tags_raw)
+                    except Exception:  # noqa: BLE001
+                        tags = []
+
+                    seen_proto_raw = row["seen_protocols"] or "[]"
+                    try:
+                        seen_protocols: list[str] = _json.loads(seen_proto_raw)
+                    except Exception:  # noqa: BLE001
+                        seen_protocols = []
+
+                    from bounty.models import Asset as _Asset
+
+                    asset = _Asset(
+                        id=str(row["id"]),
+                        program_id=str(row["program_id"]),
+                        host=str(row["host"]),
+                        port=row["port"],
+                        scheme=str(row["scheme"] or "https"),
+                        url=str(row["url"]),
+                        ip=row["ip"],
+                        status=str(row["status"] or "alive"),
+                        http_status=row["http_status"],
+                        title=row["title"],
+                        server=row["server"],
+                        cdn=row["cdn"],
+                        waf=row["waf"],
+                        tls_issuer=row["tls_issuer"],
+                        tls_expiry=row["tls_expiry"],
+                        tags=tags,
+                        seen_protocols=seen_protocols,
+                        primary_scheme=str(row["primary_scheme"] or "https"),
+                    )
+
+                    # Re-probe to get fresh probe_result
+                    probe_result = await probe(asset.url, verify=False)
+                    if not probe_result.ok:
+                        return
+
+                    await fingerprint_asset(
+                        asset, probe_result, probe_fn,
+                        conn, favicon_cache=favicon_cache,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                if bound_log is not None:
+                    bound_log.warning(
+                        "fingerprint_phase_error", asset_id=asset_id, error=str(exc)
+                    )
+
+    await _asyncio.gather(*[_fp_one(aid) for aid in asset_ids], return_exceptions=True)
 
 
 async def recon_pipeline(
@@ -711,6 +806,17 @@ async def recon_pipeline(
             effective_db, scan_id, "http_probe", "completed",
             {"probed": probed_count, "assets": len(asset_ids)},
         )
+
+        # ── Phase 5: Fingerprinting ───────────────────────────────────────
+        if asset_ids:
+            await _update_scan_phase(effective_db, scan_id, "fingerprint", "running")
+            await _run_fingerprint_phase(
+                effective_db, program_id, asset_ids, probe_fn=probe, bound_log=bound_log
+            )
+            await _update_scan_phase(
+                effective_db, scan_id, "fingerprint", "completed",
+                {"assets_processed": len(asset_ids)},
+            )
 
     except Exception as exc:  # noqa: BLE001
         pipeline_error = str(exc)

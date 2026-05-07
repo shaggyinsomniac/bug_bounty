@@ -176,7 +176,7 @@ class FingerprintResult(_Base):
     confidence: int = Field(default=50, ge=0, le=100)
 
     # Set after DB insert
-    id: int | None = None
+    id: str | None = None
     asset_id: str | None = None
     created_at: datetime | None = None
 

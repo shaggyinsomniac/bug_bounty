@@ -24,7 +24,10 @@ dependencies = [
     # Scheduling
     "apscheduler>=3.10.4",
 
-    # Hashing (favicon fingerprinting)
+    # Fingerprinting
+    "bs4>=0.0.2",
+    "lxml>=5.2.0",
+    "chardet>=5.2.0",
     "mmh3>=4.1.0",
 
     # Browser automation

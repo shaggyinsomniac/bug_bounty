@@ -60,6 +60,87 @@ LOG_FORMAT=console     # console (pretty) or json (structured)
 
 ---
 
+## Current Capabilities (Phase 3)
+
+### Fingerprinting Engine (Phase 3)
+
+After HTTP probing, each successful `ProbeResult` is passed through four pure-function
+parsers plus an async favicon fetcher. Results are deduped with confidence boosting,
+persisted to `fingerprints`, and summarised back in the `assets` row.
+
+#### Parsers
+
+| Parser | Source | Examples detected |
+|---|---|---|
+| `headers.py` | HTTP response headers | nginx, apache, IIS, cloudflare, cloudfront, fastly, akamai, PHP, ASP.NET, drupal, wordpress, jenkins, shopify |
+| `cookies.py` | Set-Cookie names | PHPSESSID→php, JSESSIONID→java, laravel_session, cf_clearance→cloudflare, incap_ses→imperva, datadome |
+| `body.py` | HTML body (BeautifulSoup + lxml) | `<meta generator>` WordPress/Drupal/Hugo/Jekyll, path patterns `/wp-content/`/`/_next/`, `__NEXT_DATA__`, title-based admin panels |
+| `tls.py` | TLS certificate fields | self-signed, Let's Encrypt, legacy TLS, cert-expired, cert-expiring-soon |
+| `favicon.py` | Favicon byte hash | Shodan/FOFA-compatible mmh3(base64(favicon)) lookup against `favicon_db.json` |
+
+#### Confidence Scoring
+
+- **90–100**: Direct version-bearing signal (Server header with version, `<meta generator>`, `X-Drupal-Cache`)
+- **60–89**: Strong indirect signal (JSESSIONID cookie, `/wp-content/` path, distinctive favicon hash)
+- **30–59**: Weak heuristic (generic body class patterns, admin path presence)
+- Two signals for same tech → `max(conf) + 10`, capped at 100
+- Three+ signals → `max(conf) + 20`, capped at 100
+
+#### Admin Panel Detection
+
+`body.py` contains title-based detection for 30+ admin panels & services:
+Jenkins, Grafana, Kibana, phpMyAdmin, Adminer, Confluence, Jira, GitLab, Gitea, 
+Argo CD, Harbor, Nexus, SonarQube, RabbitMQ Management, Kubernetes Dashboard,
+Portainer, Rancher, Zabbix, Nagios, Prometheus, Mattermost, Rocket.Chat,
+Discourse, Webmin, cPanel, Plesk, Apache Spark, Apache Airflow, Apache Solr,
+Consul, Vault, and default pages (nginx-default-page, directory-listing, **phpinfo-exposed**).
+
+#### Favicon Hash DB
+
+`bounty/fingerprint/data/favicon_db.json` contains ~33 starter entries (one per tool
+listed above). Hash fields are `null` placeholders — fill as you encounter real installs:
+
+```bash
+# After observing a real Jenkins instance
+bounty fingerprint add-favicon-hash jenkins -- -1425421542
+```
+
+#### SAN Hostname Discovery
+
+The TLS parser extracts Subject Alternative Names from cert fields. SANs that share
+the asset's root domain are inserted as `discovered_via_san` asset rows for the same
+program, enabling further probing.
+
+#### Database
+
+Migration V4 converts `fingerprints.id` from `INTEGER AUTOINCREMENT` to `TEXT` (ULID).
+The `assets` table gains `server`, `cdn`, and `waf` summary columns updated from the
+highest-confidence fingerprint in each category.
+
+#### CLI
+
+```bash
+# View fingerprints for a specific asset
+bounty fingerprint show <asset_id>
+
+# Update favicon hash in the DB
+bounty fingerprint add-favicon-hash <tech> <hash> [--category=other]
+
+# Scan with fingerprint summary in output
+bounty smoke-recon --target hackerone.com --intensity gentle
+```
+
+Sample `smoke-recon` output with fingerprinting:
+```
+  ASSETS DISCOVERED: 8
+    [200] hackerone.com         HackerOne | Leader in ...  server=cloudflare cdn=cloudflare
+           techs: cloudflare(cdn,100),  drupal(cms,100),  fastly(cdn,90)
+    [200] docs.hackerone.com    Home | HackerOne Help ...  server=cloudflare cdn=cloudflare
+           techs: cloudflare(cdn,100),  nextjs(framework,100)
+```
+
+---
+
 ## Current Capabilities (Phase 2.5)
 
 ### Subdomain Enumeration

@@ -136,8 +136,8 @@ _SCHEMA: list[str] = [
     # ------------------------------------------------------------------
     """
     CREATE TABLE IF NOT EXISTS fingerprints (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        asset_id   INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        id         TEXT PRIMARY KEY,
+        asset_id   TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
         tech       TEXT NOT NULL,    -- e.g. "WordPress", "nginx", "React"
         version    TEXT,
         category   TEXT NOT NULL DEFAULT 'other',
@@ -148,6 +148,7 @@ _SCHEMA: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_fingerprints_asset ON fingerprints(asset_id)",
+    "CREATE INDEX IF NOT EXISTS idx_fingerprints_tech ON fingerprints(tech)",
     # ------------------------------------------------------------------
     # scans
     # ------------------------------------------------------------------
@@ -528,8 +529,7 @@ COMMIT;
 # v3 migration: collapse http/https duplicates, add seen_protocols + primary_scheme columns,
 # and replace UNIQUE(program_id, url) with partial unique indexes on (program_id, host[, port]).
 # The partial-index approach is required because NULL != NULL in SQLite UNIQUE constraints.
-_MIGRATION_V3 = """
-BEGIN TRANSACTION;
+_MIGRATION_V3 = """BEGIN TRANSACTION;
 
 CREATE TABLE assets_new (
     id          TEXT PRIMARY KEY,
@@ -593,14 +593,37 @@ ALTER TABLE assets_new RENAME TO assets;
 COMMIT;
 """
 
+_MIGRATION_V4 = """
+BEGIN TRANSACTION;
+
+CREATE TABLE fingerprints_new (
+    id         TEXT PRIMARY KEY,
+    asset_id   TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    tech       TEXT NOT NULL,
+    version    TEXT,
+    category   TEXT NOT NULL DEFAULT 'other',
+    evidence   TEXT NOT NULL DEFAULT '',
+    confidence INTEGER NOT NULL DEFAULT 50,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+INSERT INTO fingerprints_new
+    SELECT CAST(id AS TEXT), asset_id, tech, version, category, evidence,
+           confidence, created_at FROM fingerprints;
+DROP TABLE fingerprints;
+ALTER TABLE fingerprints_new RENAME TO fingerprints;
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
-    # v1 → convert INTEGER pk ids to TEXT (ULID-compatible).
     _MIGRATION_V1,
     # v2 → add leads table for intel / Shodan triage.
     _MIGRATION_V2,
     # v3 → collapse http/https asset duplicates; add seen_protocols + primary_scheme;
     #       replace UNIQUE(program_id, url) with partial unique indexes on (host, port).
     _MIGRATION_V3,
+    # v4 → convert fingerprints.id to TEXT (ULID); add idx_fingerprints_tech index.
+    _MIGRATION_V4,
 ]
 
 
@@ -691,8 +714,7 @@ def _recreate_indexes(conn: sqlite3.Connection) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_unique_port ON assets(program_id, host, port) WHERE port IS NOT NULL",
         "CREATE INDEX IF NOT EXISTS idx_asset_history_asset ON asset_history(asset_id)",
         "CREATE INDEX IF NOT EXISTS idx_fingerprints_asset ON fingerprints(asset_id)",
-        "CREATE INDEX IF NOT EXISTS idx_scans_program ON scans(program_id)",
-        "CREATE INDEX IF NOT EXISTS idx_scans_status ON scans(status)",
+        "CREATE INDEX IF NOT EXISTS idx_fingerprints_tech ON fingerprints(tech)",
         "CREATE INDEX IF NOT EXISTS idx_scan_phases_scan ON scan_phases(scan_id)",
         "CREATE INDEX IF NOT EXISTS idx_findings_program ON findings(program_id)",
         "CREATE INDEX IF NOT EXISTS idx_findings_asset ON findings(asset_id)",
