@@ -1,27 +1,27 @@
 """
-bounty.recon.subdomains — Async subdomain enumeration via subfinder.
+bounty.recon.subdomains — Async subdomain enumeration via subfinder + crt.sh.
 
-subfinder is run as a subprocess with ``asyncio.create_subprocess_exec``.
-Results are streamed line-by-line as they appear in stdout (subfinder writes
-one JSON object per line with ``-json`` flag), so newly discovered subdomains
-are yielded immediately rather than buffered until the tool finishes.
+Two sources run in parallel:
+  1. subfinder — runs as a subprocess, streams results line-by-line
+  2. crt.sh    — queries certificate transparency logs via HTTPS, free, no auth
 
-Intensity mapping:
+subfinder intensity mapping:
   gentle     — ``-passive`` flag (passive sources only, no active DNS)
   normal     — default subfinder behavior (passive + some active sources)
   aggressive — ``-all`` flag (all sources including brute-force word lists)
 
 Timeouts:
-  gentle / normal = 10 minutes
-  aggressive      = 30 minutes
+  gentle / normal subfinder = 10 minutes
+  aggressive subfinder      = 30 minutes
+  crt.sh per-domain         = 30 seconds
+
+On crt.sh failure / timeout: log warning, continue with subfinder-only results.
+If subfinder is missing: crt.sh results are still returned.
 
 Deduplication:
   Known subdomains for the domain are loaded from the DB at the start of
   enumeration; any hostname already present is skipped.  The DB query runs
   once (not per result) to keep the hot path fast.
-
-Discovery events:
-  ``asset:new`` is published for each freshly found hostname.
 """
 
 from __future__ import annotations
@@ -33,15 +33,18 @@ import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import httpx
+
 from bounty import get_logger
 from bounty.config import get_settings
 from bounty.exceptions import ToolFailedError, ToolMissingError, ToolTimeoutError
 
 log = get_logger(__name__)
 
-_GENTLE_TIMEOUT = 600    # 10 minutes
-_NORMAL_TIMEOUT = 600    # 10 minutes
+_GENTLE_TIMEOUT = 600       # 10 minutes
+_NORMAL_TIMEOUT = 600       # 10 minutes
 _AGGRESSIVE_TIMEOUT = 1800  # 30 minutes
+_CRTSH_TIMEOUT = 30.0       # crt.sh per-domain timeout in seconds
 
 
 def _find_tool(name: str) -> str:
@@ -76,6 +79,54 @@ def _find_tool(name: str) -> str:
     )
 
 
+async def _crtsh_hostnames(domain: str) -> set[str]:
+    """Fetch subdomains from crt.sh certificate transparency search.
+
+    Queries ``https://crt.sh/?q=%25.{domain}&output=json`` and returns a
+    deduplicated set of lowercase FQDNs.  Each JSON entry has a
+    ``name_value`` field that may contain newline-separated names and
+    leading ``*.`` wildcards.
+
+    This function is called concurrently with subfinder so the HTTP round-trip
+    happens in parallel with subprocess I/O.
+
+    Args:
+        domain: Root domain to query, e.g. ``"example.com"``.
+
+    Returns:
+        Set of discovered hostnames (lowercased, wildcards stripped).
+        Returns an empty set on any error (errors are logged as warnings).
+    """
+    url = f"https://crt.sh/?q=%25.{domain}&output=json"
+    bound_log = log.bind(domain=domain, source="crtsh")
+    bound_log.debug("crtsh_start", url=url)
+    found: set[str] = set()
+    try:
+        async with httpx.AsyncClient(timeout=_CRTSH_TIMEOUT, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"Accept": "application/json"})
+            # crt.sh returns 404 when there are no matching certificates.
+            # Treat it as an empty result rather than an error.
+            if resp.status_code == 404:
+                bound_log.debug("crtsh_empty_result", domain=domain)
+                return found
+            resp.raise_for_status()
+            entries: list[dict[str, object]] = resp.json()
+
+        for entry in entries:
+            name_value = str(entry.get("name_value", ""))
+            for raw in name_value.splitlines():
+                hostname = raw.strip().lower().lstrip("*.").rstrip(".")
+                if hostname and "." in hostname and " " not in hostname:
+                    found.add(hostname)
+
+        bound_log.info("crtsh_done", found=len(found))
+    except httpx.TimeoutException:
+        bound_log.warning("crtsh_timeout", timeout_s=_CRTSH_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001
+        bound_log.warning("crtsh_failed", error=str(exc))
+    return found
+
+
 async def enumerate(
     domain: str,
     *,
@@ -85,6 +136,9 @@ async def enumerate(
     """Async generator that yields discovered subdomain hostnames.
 
     Runs subfinder as a subprocess and streams results as they arrive.
+    Concurrently queries crt.sh; those results are yielded after subfinder
+    completes (or when subfinder is not installed — crt.sh still runs).
+
     Skips hostnames already in ``known_hosts``.
 
     Args:
@@ -98,28 +152,37 @@ async def enumerate(
         Discovered hostnames (FQDN strings, lowercased).
 
     Raises:
-        ToolMissingError: If subfinder is not installed.
-        ToolTimeoutError: If the run exceeds the timeout for the intensity.
+        ToolMissingError: If subfinder is not installed (raised after
+                          crt.sh results are yielded so callers still
+                          receive passive results).
+        ToolTimeoutError: If the subfinder run exceeds the intensity timeout.
         ToolFailedError: If subfinder exits non-zero (stderr captured).
     """
-    binary = _find_tool("subfinder")
     seen: set[str] = set(known_hosts or [])
 
-    cmd = [binary, "-d", domain, "-silent", "-json"]
-    if intensity == "gentle":
-        cmd.append("-passive")
-        timeout = _GENTLE_TIMEOUT
-    elif intensity == "aggressive":
-        cmd.append("-all")
-        timeout = _AGGRESSIVE_TIMEOUT
-    else:
-        timeout = _NORMAL_TIMEOUT
+    # Start crt.sh concurrently — runs while subfinder is streaming
+    crtsh_task: asyncio.Task[set[str]] = asyncio.create_task(_crtsh_hostnames(domain))
 
-    bound_log = log.bind(domain=domain, intensity=intensity, tool="subfinder")
-    bound_log.info("subfinder_start", cmd=" ".join(cmd))
-
+    cmd: list[str] = []
     proc: asyncio.subprocess.Process | None = None
+    tool_error: BaseException | None = None
+
     try:
+        binary = _find_tool("subfinder")
+
+        cmd = [binary, "-d", domain, "-silent", "-json"]
+        if intensity == "gentle":
+            cmd.append("-passive")
+            timeout = _GENTLE_TIMEOUT
+        elif intensity == "aggressive":
+            cmd.append("-all")
+            timeout = _AGGRESSIVE_TIMEOUT
+        else:
+            timeout = _NORMAL_TIMEOUT
+
+        bound_log = log.bind(domain=domain, intensity=intensity, tool="subfinder")
+        bound_log.info("subfinder_start", cmd=" ".join(cmd))
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -154,11 +217,6 @@ async def enumerate(
         await proc.wait()
         stderr_text = await stderr_task
 
-        # subfinder exit codes:
-        #   0 = success
-        #   1 = partial errors (some sources failed)
-        #   2 = no results or missing API keys — treat as non-fatal
-        # We only raise for exit codes outside that range (e.g. segfault = 139).
         if proc.returncode is not None and proc.returncode not in (0, 1, 2):
             raise ToolFailedError("subfinder", proc.returncode, stderr_text[:500])
         if proc.returncode == 2:
@@ -169,17 +227,44 @@ async def enumerate(
 
         bound_log.info("subfinder_done", found=len(seen))
 
-    except (ToolMissingError, ToolTimeoutError, ToolFailedError):
-        raise
+    except ToolMissingError as exc:
+        # Store the error; still yield crt.sh results before propagating
+        tool_error = exc
+        log.warning("subfinder_missing_falling_back_to_crtsh", domain=domain)
+    except (ToolTimeoutError, ToolFailedError) as exc:
+        tool_error = exc
     except Exception as exc:  # noqa: BLE001
+        bound_log = log.bind(domain=domain, intensity=intensity, tool="subfinder")
         bound_log.error("subfinder_unexpected_error", error=str(exc))
-        raise ToolFailedError("subfinder", -1, str(exc)) from exc
+        tool_error = ToolFailedError("subfinder", -1, str(exc))
     finally:
         if proc is not None and proc.returncode is None:
             try:
                 proc.kill()
             except ProcessLookupError:
                 pass
+
+    # ── Yield crt.sh results (runs regardless of subfinder outcome) ──────────
+    crtsh_new = 0
+    try:
+        crtsh_found = await asyncio.wait_for(crtsh_task, timeout=_CRTSH_TIMEOUT)
+        for hostname in sorted(crtsh_found):
+            if hostname not in seen:
+                seen.add(hostname)
+                crtsh_new += 1
+                yield hostname
+        log.debug("crtsh_merged", domain=domain, new=crtsh_new, total_crtsh=len(crtsh_found))
+    except TimeoutError:
+        log.warning("crtsh_await_timeout", domain=domain)
+        crtsh_task.cancel()
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        log.warning("crtsh_merge_failed", domain=domain, error=str(exc))
+
+    # Propagate any subfinder error AFTER crt.sh results have been yielded
+    if tool_error is not None:
+        raise tool_error
 
 
 def _parse_line(line: str) -> str | None:

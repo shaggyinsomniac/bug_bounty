@@ -301,10 +301,174 @@ _SCHEMA: list[str] = [
 # Migrations list — append new SQL strings here; never edit existing entries.
 # ---------------------------------------------------------------------------
 
+# v1 migration: convert INTEGER PRIMARY KEY ids to TEXT (ULID-compatible).
+# Uses the SQLite rename-table-and-copy pattern because ALTER COLUMN is
+# not supported.  Safe to run on a DB with 1 row in programs and no other
+# data.  Wrapped in BEGIN/COMMIT so it either fully applies or rolls back.
+_MIGRATION_V1 = """
+BEGIN TRANSACTION;
+
+CREATE TABLE assets_new (
+    id          TEXT PRIMARY KEY,
+    program_id  TEXT NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+    host        TEXT NOT NULL,
+    port        INTEGER,
+    scheme      TEXT NOT NULL DEFAULT 'https',
+    url         TEXT NOT NULL,
+    ip          TEXT,
+    status      TEXT NOT NULL DEFAULT 'discovered',
+    http_status INTEGER,
+    title       TEXT,
+    server      TEXT,
+    cdn         TEXT,
+    waf         TEXT,
+    tls_issuer  TEXT,
+    tls_expiry  TEXT,
+    tags        TEXT NOT NULL DEFAULT '[]',
+    last_seen   TEXT,
+    first_seen  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(program_id, url)
+);
+INSERT INTO assets_new
+    SELECT CAST(id AS TEXT), program_id, host, port, scheme, url, ip, status,
+           http_status, title, server, cdn, waf, tls_issuer, tls_expiry, tags,
+           last_seen, first_seen, created_at, updated_at FROM assets;
+DROP TABLE assets;
+ALTER TABLE assets_new RENAME TO assets;
+
+CREATE TABLE asset_history_new (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id   TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    field      TEXT NOT NULL,
+    old_value  TEXT,
+    new_value  TEXT,
+    changed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+INSERT INTO asset_history_new
+    SELECT id, CAST(asset_id AS TEXT), field, old_value, new_value, changed_at
+    FROM asset_history;
+DROP TABLE asset_history;
+ALTER TABLE asset_history_new RENAME TO asset_history;
+
+CREATE TABLE fingerprints_new (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id   TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    tech       TEXT NOT NULL,
+    version    TEXT,
+    category   TEXT NOT NULL DEFAULT 'other',
+    evidence   TEXT NOT NULL DEFAULT '',
+    confidence INTEGER NOT NULL DEFAULT 50,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+INSERT INTO fingerprints_new
+    SELECT id, CAST(asset_id AS TEXT), tech, version, category, evidence,
+           confidence, created_at FROM fingerprints;
+DROP TABLE fingerprints;
+ALTER TABLE fingerprints_new RENAME TO fingerprints;
+
+CREATE TABLE scans_new (
+    id           TEXT PRIMARY KEY,
+    program_id   TEXT REFERENCES programs(id) ON DELETE SET NULL,
+    asset_id     TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    scan_type    TEXT NOT NULL DEFAULT 'full',
+    status       TEXT NOT NULL DEFAULT 'queued',
+    intensity    TEXT NOT NULL DEFAULT 'normal',
+    triggered_by TEXT NOT NULL DEFAULT 'scheduler',
+    started_at   TEXT,
+    finished_at  TEXT,
+    finding_count INTEGER NOT NULL DEFAULT 0,
+    error        TEXT,
+    meta         TEXT NOT NULL DEFAULT '{}',
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+INSERT INTO scans_new
+    SELECT CAST(id AS TEXT), program_id, CAST(asset_id AS TEXT), scan_type,
+           status, intensity, triggered_by, started_at, finished_at,
+           finding_count, error, meta, created_at FROM scans;
+DROP TABLE scans;
+ALTER TABLE scans_new RENAME TO scans;
+
+CREATE TABLE scan_phases_new (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id     TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+    phase       TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    started_at  TEXT,
+    finished_at TEXT,
+    detail      TEXT NOT NULL DEFAULT '{}'
+);
+INSERT INTO scan_phases_new
+    SELECT id, CAST(scan_id AS TEXT), phase, status, started_at, finished_at,
+           detail FROM scan_phases;
+DROP TABLE scan_phases;
+ALTER TABLE scan_phases_new RENAME TO scan_phases;
+
+CREATE TABLE findings_new (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id      TEXT REFERENCES programs(id) ON DELETE SET NULL,
+    asset_id        TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    scan_id         TEXT REFERENCES scans(id) ON DELETE SET NULL,
+    dedup_key       TEXT NOT NULL UNIQUE,
+    title           TEXT NOT NULL,
+    category        TEXT NOT NULL,
+    severity        INTEGER NOT NULL DEFAULT 500,
+    severity_label  TEXT NOT NULL DEFAULT 'medium',
+    status          TEXT NOT NULL DEFAULT 'new',
+    url             TEXT NOT NULL,
+    path            TEXT NOT NULL DEFAULT '',
+    description     TEXT NOT NULL DEFAULT '',
+    remediation     TEXT NOT NULL DEFAULT '',
+    cvss_score      REAL,
+    cve             TEXT,
+    cwe             TEXT,
+    validated       INTEGER NOT NULL DEFAULT 0,
+    validated_at    TEXT,
+    tags            TEXT NOT NULL DEFAULT '[]',
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+INSERT INTO findings_new
+    SELECT id, program_id, CAST(asset_id AS TEXT), CAST(scan_id AS TEXT),
+           dedup_key, title, category, severity, severity_label, status, url,
+           path, description, remediation, cvss_score, cve, cwe, validated,
+           validated_at, tags, created_at, updated_at FROM findings;
+DROP TABLE findings;
+ALTER TABLE findings_new RENAME TO findings;
+
+CREATE TABLE secrets_validations_new (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id        TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    finding_id      INTEGER REFERENCES findings(id) ON DELETE SET NULL,
+    provider        TEXT NOT NULL,
+    secret_hash     TEXT NOT NULL,
+    secret_preview  TEXT NOT NULL,
+    secret_pattern  TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    scope           TEXT,
+    identity        TEXT,
+    last_checked    TEXT,
+    next_check      TEXT,
+    error_message   TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(secret_hash, provider)
+);
+INSERT INTO secrets_validations_new
+    SELECT id, CAST(asset_id AS TEXT), finding_id, provider, secret_hash,
+           secret_preview, secret_pattern, status, scope, identity,
+           last_checked, next_check, error_message, created_at, updated_at
+    FROM secrets_validations;
+DROP TABLE secrets_validations;
+ALTER TABLE secrets_validations_new RENAME TO secrets_validations;
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
-    # v1 → initial schema (all tables above)
-    # Applied via init_db(); nothing additional required for v1.
-    # Future migrations go here as plain SQL strings.
+    # v1 → convert INTEGER pk ids to TEXT (ULID-compatible).
+    _MIGRATION_V1,
 ]
 
 
@@ -348,7 +512,6 @@ def apply_migrations(db_path: Path) -> None:
     """
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     try:
-        conn.execute("PRAGMA foreign_keys = ON")
         row = conn.execute("PRAGMA user_version").fetchone()
         current_version: int = row[0] if row else 0
         for idx, migration_sql in enumerate(_MIGRATIONS):
@@ -360,12 +523,56 @@ def apply_migrations(db_path: Path) -> None:
                 version=migration_version,
                 path=str(db_path),
             )
+            # Disable FK checks for the duration of the migration so that
+            # rename-table-and-copy steps don't trip over FK cycles.
+            # PRAGMA foreign_keys cannot be changed inside a transaction, so
+            # we set it before executescript (which auto-commits first).
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.commit()
             conn.executescript(migration_sql)
+            # Recreate indexes that were implicitly dropped with the old tables.
+            conn.execute("PRAGMA foreign_keys = ON")
+            _recreate_indexes(conn)
             conn.execute(f"PRAGMA user_version = {migration_version}")
             conn.commit()
             current_version = migration_version
     finally:
         conn.close()
+
+
+def _recreate_indexes(conn: sqlite3.Connection) -> None:
+    """Recreate all application indexes (idempotent — uses IF NOT EXISTS).
+
+    Called after a migration that drops and recreates tables, since SQLite
+    drops indexes automatically when the underlying table is dropped.
+
+    Args:
+        conn: Open SQLite connection.
+    """
+    index_stmts = [
+        "CREATE INDEX IF NOT EXISTS idx_assets_program ON assets(program_id)",
+        "CREATE INDEX IF NOT EXISTS idx_assets_host ON assets(host)",
+        "CREATE INDEX IF NOT EXISTS idx_asset_history_asset ON asset_history(asset_id)",
+        "CREATE INDEX IF NOT EXISTS idx_fingerprints_asset ON fingerprints(asset_id)",
+        "CREATE INDEX IF NOT EXISTS idx_scans_program ON scans(program_id)",
+        "CREATE INDEX IF NOT EXISTS idx_scans_status ON scans(status)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_phases_scan ON scan_phases(scan_id)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_program ON findings(program_id)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_asset ON findings(asset_id)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(severity)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_dedup ON findings(dedup_key)",
+        "CREATE INDEX IF NOT EXISTS idx_evidence_finding ON evidence_packages(finding_id)",
+        "CREATE INDEX IF NOT EXISTS idx_secrets_status ON secrets_validations(status)",
+        "CREATE INDEX IF NOT EXISTS idx_secrets_provider ON secrets_validations(provider)",
+        "CREATE INDEX IF NOT EXISTS idx_reports_finding ON reports(finding_id)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit_log(operation)",
+        "CREATE INDEX IF NOT EXISTS idx_targets_program ON targets(program_id)",
+    ]
+    for stmt in index_stmts:
+        conn.execute(stmt)
+    conn.commit()
 
 
 @contextmanager

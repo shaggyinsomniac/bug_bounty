@@ -440,7 +440,7 @@ class SSEEvent(_Base):
     data: dict[str, Any]
     """Arbitrary JSON payload for the event."""
 
-    scan_id: int | None = None
+    scan_id: str | None = None
     program_id: str | None = None
 
 

@@ -498,20 +498,26 @@ class TestNaabuLineParser:
 
 @pytest.mark.asyncio
 async def test_recon_pipeline_mini() -> None:
-    """Run the recon pipeline against a single known domain.
+    """Run the recon pipeline against a single known domain and verify DB state.
 
     Uses TEST_DOMAIN env var (default: httpbin.org).
     Skips subfinder/naabu steps gracefully if tools are missing.
+
+    This test is the guard against the silent-persistence bug: it queries the
+    DB directly after the pipeline completes and asserts that actual rows were
+    written — not just that the in-memory return value looks non-empty.
     """
-    from bounty.db import init_db
+    from bounty.db import init_db, apply_migrations
     from bounty.models import Target
     from bounty.recon import recon_pipeline
+    from bounty.ulid import make_ulid
 
     test_domain = os.environ.get("TEST_DOMAIN", "httpbin.org")
 
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "test.db"
         init_db(db_path)
+        apply_migrations(db_path)
 
         # Insert a placeholder program
         from bounty.db import get_conn
@@ -521,6 +527,8 @@ async def test_recon_pipeline_mini() -> None:
                 ("test:pipeline", "manual", "pipeline", "Pipeline Test"),
             )
             conn.commit()
+
+        scan_id = make_ulid()
 
         targets = [
             Target(
@@ -536,12 +544,73 @@ async def test_recon_pipeline_mini() -> None:
             targets,
             intensity="gentle",
             db_path=db_path,
+            scan_id=scan_id,
         )
 
-        # Should have discovered at least the root domain as an asset
-        assert isinstance(result["assets"], list)
-        # At least one HTTP probe should have succeeded against httpbin.org
+        # ── Assert return value ───────────────────────────────────────────────
+        assert isinstance(result["assets"], list), "assets key must be a list"
         assert len(result["assets"]) >= 1, (
-            f"Expected >=1 assets for {test_domain}, got 0"
+            f"Expected >=1 assets in return value for {test_domain}, got 0"
         )
+
+        # ── Assert DB state (this is the critical check) ──────────────────────
+        from bounty.db import get_conn
+        with get_conn(db_path) as conn:
+            # 1. Assets table must have rows
+            asset_count = conn.execute(
+                "SELECT COUNT(*) FROM assets WHERE program_id='test:pipeline'"
+            ).fetchone()[0]
+            assert asset_count >= 1, (
+                f"Expected >=1 assets in DB for test:pipeline, got {asset_count}. "
+                "Silent persistence bug detected — check asset_upsert_failed logs."
+            )
+
+            # 2. Scan row must exist with status='completed'
+            scan_row = conn.execute(
+                "SELECT status, finished_at FROM scans WHERE id=?",
+                (scan_id,),
+            ).fetchone()
+            assert scan_row is not None, (
+                f"Scan row not found in DB for id={scan_id}. "
+                "Pipeline must create the scan row before writing phases."
+            )
+            assert scan_row["status"] == "completed", (
+                f"Expected scan status='completed', got '{scan_row['status']}'. "
+                f"Check pipeline error handling."
+            )
+            assert scan_row["finished_at"] is not None, (
+                "scan.finished_at must be set when pipeline completes"
+            )
+
+            # 3. scan_phases rows must exist with status='completed'
+            phase_rows = conn.execute(
+                "SELECT phase, status FROM scan_phases WHERE scan_id=?",
+                (scan_id,),
+            ).fetchall()
+            assert len(phase_rows) >= 1, (
+                f"Expected >=1 scan_phases rows for scan_id={scan_id}, got 0. "
+                "FK violation likely — scan row must be created before phase writes."
+            )
+            phases_map = {row["phase"]: row["status"] for row in phase_rows}
+            # At minimum http_probe phase should be completed
+            assert "http_probe" in phases_map, (
+                f"http_probe phase not found; got phases: {list(phases_map.keys())}"
+            )
+            assert phases_map["http_probe"] == "completed", (
+                f"http_probe phase status={phases_map['http_probe']}, expected 'completed'"
+            )
+
+            # 4. Asset IDs in return value must match what's in the DB
+            db_ids = {
+                row["id"]
+                for row in conn.execute(
+                    "SELECT id FROM assets WHERE program_id='test:pipeline'"
+                ).fetchall()
+            }
+            for aid in result["assets"]:
+                assert aid in db_ids, (
+                    f"Asset ID {aid!r} from pipeline return value not found in DB. "
+                    "Upsert must commit before returning."
+                )
+
 
