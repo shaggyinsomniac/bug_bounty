@@ -74,14 +74,20 @@ def _find_paired(provider: str, text: str, anchor_start: int, anchor_end: int) -
     search_start = max(0, anchor_start - _PROXIMITY)
     search_end = min(len(text), anchor_end + _PROXIMITY)
     window = text[search_start:search_end]
-    sm = secondary.search(window)
-    if sm is None:
-        return None
-    candidate = sm.group(1) if sm.lastindex else sm.group(0)
-    anchor_val = text[anchor_start:anchor_end]
-    if candidate == anchor_val:
-        return None
-    return candidate
+    # Iterate all matches in the window; skip any that overlap with the anchor
+    # in absolute text coordinates.
+    for sm in secondary.finditer(window):
+        abs_match_start = search_start + sm.start()
+        abs_match_end = search_start + sm.end()
+        # Reject overlap with anchor span
+        if abs_match_start < anchor_end and abs_match_end > anchor_start:
+            continue
+        candidate = sm.group(1) if sm.lastindex else sm.group(0)
+        anchor_val = text[anchor_start:anchor_end]
+        if candidate == anchor_val:
+            continue
+        return candidate
+    return None
 
 
 def scan(text: str) -> list[SecretCandidate]:

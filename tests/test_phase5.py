@@ -137,11 +137,11 @@ class TestPatternPositive:
         assert m is not None
 
     def test_twilio_sid(self):
-        m = TWILIO_ACCOUNT_SID.regex.search("ACdeadbeef0123456789abcdef01234567")
+        m = TWILIO_ACCOUNT_SID.regex.search("ACfeedfacecafebabefeedfacecafebabe")
         assert m is not None
 
     def test_twilio_auth_token(self):
-        m = TWILIO_AUTH_TOKEN.regex.search("deadbeef0123456789abcdef01234567")
+        m = TWILIO_AUTH_TOKEN.regex.search("badc0ffee0ddf00dbadc0ffee0ddf00d")
         assert m is not None
 
     def test_sendgrid(self):
@@ -309,8 +309,8 @@ class TestScanner:
         assert scan("Hello world, no credentials here!") == []
 
     def test_twilio_pairing(self):
-        sid = "ACdeadbeef0123456789abcdef01234567"
-        auth = "deadbeef0123456789abcdef01234567"
+        sid = "ACfeedfacecafebabefeedfacecafebabe"
+        auth = "badc0ffee0ddf00dbadc0ffee0ddf00d"
         text = f"TWILIO_ACCOUNT_SID={sid}\nTWILIO_AUTH_TOKEN={auth}\n"
         candidates = scan(text)
         twilio = [c for c in candidates if c.provider == "twilio"]
@@ -532,8 +532,8 @@ class TestTwilioValidator:
     def test_live(self):
         from bounty.validate.twilio import TwilioValidator
         validator = TwilioValidator()
-        sid = "ACdeadbeef0123456789abcdef01234567"
-        auth = "deadbeef0123456789abcdef01234567"
+        sid = "ACfeedfacecafebabefeedfacecafebabe"
+        auth = "badc0ffee0ddf00dbadc0ffee0ddf00d"
         candidate = _fake_candidate("twilio", sid, auth, "twilio-account-sid")
         mock_resp = _mock_response(200, {
             "sid": sid, "friendly_name": "Test", "status": "active", "type": "Trial"
@@ -548,7 +548,7 @@ class TestTwilioValidator:
     def test_skipped_no_auth_token(self):
         from bounty.validate.twilio import TwilioValidator
         validator = TwilioValidator()
-        sid = "ACdeadbeef0123456789abcdef01234567"
+        sid = "ACfeedfacecafebabefeedfacecafebabe"
         candidate = _fake_candidate("twilio", sid, None, "twilio-account-sid")
         http = AsyncMock()
         result = asyncio.run(validator.validate(candidate, http))

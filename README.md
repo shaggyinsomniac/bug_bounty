@@ -15,6 +15,53 @@ and stores everything in a local SQLite database with full provenance.
 
 ---
 
+## Web UI
+
+Phase 7.1 ships the FastAPI backend. Run the web UI with:
+
+```bash
+bounty serve
+# or with options:
+bounty serve --host 127.0.0.1 --port 8765 --reload
+```
+
+Default URL: **http://127.0.0.1:8765**
+
+### Authentication
+
+Set the `UI_TOKEN` environment variable to protect the UI in production:
+
+```bash
+export UI_TOKEN=your-secret-token
+bounty serve
+```
+
+- Without `UI_TOKEN` (dev mode): all routes are open.
+- With `UI_TOKEN`: `/api/*` and `/sse/*` require `Authorization: Bearer <token>`;
+  browser sessions use a cookie set via `POST /login`.
+
+### API overview
+
+| Endpoint | Description |
+|---|---|
+| `GET /healthz` | Liveness probe |
+| `GET /readyz` | Readiness probe (DB connectivity check) |
+| `GET /api/assets` | Paginated asset list |
+| `GET /api/findings` | Paginated findings list |
+| `GET /api/findings/stats` | Counts by severity / status / category |
+| `GET /api/scans` | Paginated scan list |
+| `POST /api/scans` | Trigger a new scan |
+| `GET /api/programs` | Program list |
+| `GET /api/secrets` | Secret validation list |
+| `GET /api/intel/leads` | Intel leads list |
+| `GET /sse/events` | Server-sent events stream |
+
+> **Phases 7.2–7.4** will add the full UI (dashboard, findings table, scan
+> timeline, etc.). Phase 7.1 ships the backend only; visiting `/` shows a
+> placeholder page.
+
+---
+
 ## Prerequisites
 
 | Dependency | Version | Install |
