@@ -763,6 +763,44 @@ ALTER TABLE secrets_validations_v6 RENAME TO secrets_validations;
 COMMIT;
 """
 
+_MIGRATION_V7 = """
+BEGIN TRANSACTION;
+
+-- Convert secrets_validations.id from INTEGER AUTOINCREMENT to TEXT (ULID).
+-- Existing rows get CAST(id AS TEXT) IDs; new rows will receive real ULIDs
+-- from application code.
+CREATE TABLE secrets_validations_v7 (
+    id              TEXT PRIMARY KEY,
+    asset_id        TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    finding_id      TEXT REFERENCES findings(id) ON DELETE SET NULL,
+    provider        TEXT NOT NULL,
+    secret_hash     TEXT NOT NULL,
+    secret_preview  TEXT NOT NULL,
+    secret_pattern  TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    scope           TEXT,
+    identity        TEXT,
+    last_checked    TEXT,
+    next_check      TEXT,
+    error_message   TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(secret_hash, provider)
+);
+
+INSERT INTO secrets_validations_v7
+    SELECT CAST(id AS TEXT), asset_id, finding_id, provider, secret_hash,
+           secret_preview, secret_pattern, status, scope, identity,
+           last_checked, next_check, error_message, created_at, updated_at
+    FROM secrets_validations;
+
+-- evidence_packages.secret_val_id already TEXT; FK target changes to same table name.
+DROP TABLE secrets_validations;
+ALTER TABLE secrets_validations_v7 RENAME TO secrets_validations;
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
     _MIGRATION_V1,
     # v2 → add leads table for intel / Shodan triage.
@@ -778,6 +816,8 @@ _MIGRATIONS: list[str] = [
     # v6 → convert findings.id and evidence_packages.id from INTEGER to TEXT (ULID).
     #       Updates FK references in reports and secrets_validations.
     _MIGRATION_V6,
+    # v7 → convert secrets_validations.id from INTEGER to TEXT (ULID).
+    _MIGRATION_V7,
 ]
 
 

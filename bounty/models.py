@@ -39,7 +39,7 @@ class _Base(BaseModel):
 SeverityLabel = Literal["critical", "high", "medium", "low", "info"]
 ScanStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 FindingStatus = Literal["new", "triaged", "reported", "accepted", "duplicate", "wont_fix", "resolved"]
-SecretStatus = Literal["pending", "live", "invalid", "error", "revoked"]
+SecretStatus = Literal["pending", "live", "invalid", "error", "revoked", "skipped"]
 Platform = Literal["h1", "bugcrowd", "intigriti", "manual"]
 ScanType = Literal["full", "recon", "detect", "validate", "custom"]
 Intensity = Literal["light", "normal", "aggressive"]
@@ -420,7 +420,7 @@ class ValidationResult(_Base):
 class SecretValidation(_Base):
     """Database row for a secrets_validations record."""
 
-    id: int | None = None
+    id: str | None = None
     asset_id: str | None = None
     finding_id: str | None = None
     provider: str

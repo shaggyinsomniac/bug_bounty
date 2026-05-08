@@ -104,6 +104,16 @@ class Settings(BaseSettings):
     asn_resolve_timeout: float = 30.0
     """Timeout in seconds for ASN → CIDR prefix lookups via BGPView API."""
 
+    # --------------------------------------------------------- secret scanning
+    secret_validation_enabled: bool = True
+    """Enable inline secret scanning + token validation during detect phase."""
+
+    secret_validation_cache_ttl_days: int = 7
+    """Re-validation window: skip re-validation if last_checked within this many days."""
+
+    secret_validation_max_concurrent: int = 5
+    """Maximum number of concurrent token-validation API calls."""
+
     # --------------------------------------------------------- validators
     @field_validator("default_intensity")
     @classmethod

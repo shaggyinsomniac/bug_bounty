@@ -45,6 +45,9 @@ app.add_typer(leads_app, name="leads")
 findings_app = typer.Typer(help="Query and export findings from the database.")
 app.add_typer(findings_app, name="findings")
 
+secrets_app = typer.Typer(help="Query and revalidate discovered secret tokens.")
+app.add_typer(secrets_app, name="secrets")
+
 log = get_logger(__name__)
 
 _INTENSITY_CHOICES = ("gentle", "normal", "aggressive")
@@ -1339,6 +1342,233 @@ def findings_count(
         bar = "█" * min(int(row["cnt"]), 40)
         typer.echo(f"  {label:<10}  {row['cnt']:>4}  {bar}")
     typer.echo(f"  {'TOTAL':<10}  {total:>4}")
+
+
+# ── secrets sub-commands ──────────────────────────────────────────────────
+
+@secrets_app.command("list")
+def secrets_list(
+    status: Annotated[str | None, typer.Option("--status", help="Filter by status (live|invalid|pending|error|all)")] = None,
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    finding: Annotated[str | None, typer.Option("--finding", help="Filter by finding ID")] = None,
+    limit: Annotated[int, typer.Option("--limit")] = 50,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """List secret validations with optional filters."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _list() -> list[Any]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status and status != "all":
+            clauses.append("status=?")
+            params.append(status)
+        if provider:
+            clauses.append("provider=?")
+            params.append(provider)
+        if finding:
+            clauses.append("finding_id=?")
+            params.append(finding)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                f"SELECT id, provider, secret_preview, status, identity, finding_id, last_checked "
+                f"FROM secrets_validations {where} ORDER BY created_at DESC LIMIT ?",
+                params,
+            )
+            return list(await cur.fetchall())
+
+    try:
+        rows = asyncio.run(_list())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not rows:
+        typer.echo("No secret validations found.")
+        return
+
+    header = f"{'ID':<26}  {'PROVIDER':<12}  {'PREVIEW':<16}  {'STATUS':<8}  {'IDENTITY':<30}  FINDING"
+    typer.echo(header)
+    typer.echo("-" * len(header))
+    for row in rows:
+        sid = str(row["id"] or "")[:26]
+        prov = str(row["provider"] or "")[:12]
+        prev = str(row["secret_preview"] or "")[:16]
+        stat = str(row["status"] or "")[:8]
+        ident = str(row["identity"] or "")[:30]
+        fid = str(row["finding_id"] or "")[:26]
+        typer.echo(f"{sid:<26}  {prov:<12}  {prev:<16}  {stat:<8}  {ident:<30}  {fid}")
+
+
+@secrets_app.command("show")
+def secrets_show(
+    secret_id: Annotated[str, typer.Argument(help="Secret validation ID (or prefix)")],
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Show full details of a secret validation record."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _show() -> Any:
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                "SELECT * FROM secrets_validations WHERE id=?", (secret_id,)
+            )
+            row = await cur.fetchone()
+            if row is None:
+                cur = await conn.execute(
+                    "SELECT * FROM secrets_validations WHERE id LIKE ? LIMIT 1",
+                    (secret_id + "%",),
+                )
+                row = await cur.fetchone()
+            return row
+
+    try:
+        row = asyncio.run(_show())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if row is None:
+        typer.echo(f"Secret validation '{secret_id}' not found.")
+        raise typer.Exit(1)
+
+    import json as _json
+    typer.echo(f"ID:           {row['id']}")
+    typer.echo(f"Provider:     {row['provider']}")
+    typer.echo(f"Preview:      {row['secret_preview']}")
+    typer.echo(f"Hash:         {row['secret_hash']}")
+    typer.echo(f"Pattern:      {row['secret_pattern']}")
+    typer.echo(f"Status:       {row['status']}")
+    typer.echo(f"Identity:     {row['identity'] or '—'}")
+    typer.echo(f"Last checked: {row['last_checked'] or '—'}")
+    typer.echo(f"Error:        {row['error_message'] or '—'}")
+    typer.echo(f"Finding ID:   {row['finding_id'] or '—'}")
+    typer.echo(f"Asset ID:     {row['asset_id'] or '—'}")
+    scope_raw = row["scope"]
+    if scope_raw:
+        try:
+            typer.echo(f"Scope:        {_json.dumps(_json.loads(scope_raw), indent=2)}")
+        except Exception:  # noqa: BLE001
+            typer.echo(f"Scope:        {scope_raw}")
+
+
+@secrets_app.command("revalidate")
+def secrets_revalidate(
+    secret_id: Annotated[str, typer.Argument(help="Secret validation ID to force revalidate")],
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Force re-validation of a secret regardless of cache TTL."""
+    import json as _json
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _revalidate() -> str:
+        import bounty.validate.registry as _reg_mod  # noqa: F401
+        from bounty.validate._base import REGISTRY
+        from bounty.secrets.scanner import SecretCandidate
+
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                "SELECT * FROM secrets_validations WHERE id=? OR id LIKE ? LIMIT 1",
+                (secret_id, secret_id + "%"),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return "NOT_FOUND"
+
+            provider = str(row["provider"])
+            secret_hash = str(row["secret_hash"])
+            validator = REGISTRY.get(provider)
+            if validator is None:
+                return f"NO_VALIDATOR:{provider}"
+
+            # Build a minimal candidate from stored fields (no context available at this point)
+            candidate = SecretCandidate(
+                provider=provider,
+                pattern_name=str(row["secret_pattern"]),
+                value=secret_hash,  # hash is what we have; can't recover raw value
+                context_before="",
+                context_after="",
+            )
+            # Override hash so it uses the stored one
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=15) as http:
+                result = await validator.validate(candidate, http)
+
+            ts = _now_iso()
+            scope_json = _json.dumps(result.scope) if result.scope else None
+            await conn.execute(
+                """
+                UPDATE secrets_validations
+                SET status=?, scope=?, identity=?, last_checked=?,
+                    error_message=?, updated_at=?
+                WHERE id=?
+                """,
+                (
+                    result.status, scope_json, result.identity,
+                    ts, result.error_message, ts, str(row["id"]),
+                ),
+            )
+            await conn.commit()
+            return result.status
+
+    try:
+        status = asyncio.run(_revalidate())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if status == "NOT_FOUND":
+        typer.echo(f"Secret validation '{secret_id}' not found.")
+    elif status.startswith("NO_VALIDATOR:"):
+        typer.echo(f"No validator registered for provider: {status.split(':')[1]}")
+    else:
+        typer.echo(f"Revalidation complete. New status: {status}")
+
+
+@secrets_app.command("stats")
+def secrets_stats(
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Show counts of secrets by provider and status."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _stats() -> tuple[list[Any], list[Any]]:
+        async with get_conn(db_path) as conn:
+            cur1 = await conn.execute(
+                "SELECT provider, COUNT(*) as cnt FROM secrets_validations "
+                "GROUP BY provider ORDER BY cnt DESC"
+            )
+            by_provider = list(await cur1.fetchall())
+            cur2 = await conn.execute(
+                "SELECT status, COUNT(*) as cnt FROM secrets_validations "
+                "GROUP BY status ORDER BY cnt DESC"
+            )
+            by_status = list(await cur2.fetchall())
+            return by_provider, by_status
+
+    try:
+        by_provider, by_status = asyncio.run(_stats())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not by_provider:
+        typer.echo("No secret validations in database.")
+        return
+
+    typer.echo("By provider:")
+    for row in by_provider:
+        typer.echo(f"  {str(row['provider']):<20}  {row['cnt']:>4}")
+    typer.echo("")
+    typer.echo("By status:")
+    for row in by_status:
+        typer.echo(f"  {str(row['status']):<12}  {row['cnt']:>4}")
 
 
 if __name__ == "__main__":

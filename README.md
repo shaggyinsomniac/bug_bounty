@@ -496,3 +496,95 @@ bounty leads promote <lead-id> --program my-prog
 # 5. Run recon on the promoted assets
 bounty smoke-recon --target <asset-host>
 ```
+
+---
+
+## Secret Scanning + Token Validation
+
+Phase 5 adds inline secret scanning and live-token validation to the detect pipeline.  Every time a finding is persisted with evidence (HTTP response bodies, `.env` files, etc.), the scanner extracts credentials and validates them against provider APIs in the background.
+
+### Supported providers (12 total)
+
+| Slug | Validation method | Cost |
+|---|---|---|
+| `aws` | STS `GetCallerIdentity` (boto3) | free |
+| `github` | `GET /user` with `Authorization: token …` | free |
+| `stripe` | `GET /v1/balance` with Bearer auth | free |
+| `openai` | `GET /v1/models` with Bearer auth | free |
+| `anthropic` | Minimal `POST /v1/messages` (1-token prompt) | ~$0.001 |
+| `slack` | `POST /api/auth.test` | free |
+| `discord` | `GET /api/users/@me` | free |
+| `twilio` | `GET /Accounts/{SID}` with Basic auth (SID + auth token) | free |
+| `sendgrid` | `GET /v3/scopes` with Bearer auth | free |
+| `mailgun` | `GET /v3/domains` with Basic auth | free |
+| `razorpay` | `GET /v1/payments?count=0` with Basic auth | free |
+| `shopify` | `GET /admin/api/2024-01/shop.json` (requires store domain from context) | free |
+
+### How validation works
+
+1. **Discovery** — the scanner searches response bodies, headers, and saved body files for credential patterns (compiled regex + pairing logic for paired secrets like AWS key+secret and Twilio SID+auth token).
+2. **Caching** — if a (hash, provider) pair was checked within `SECRET_VALIDATION_CACHE_TTL_DAYS` (default: 7 days) with a conclusive result (`live` or `invalid`), the cached status is reused and the live API is NOT called.
+3. **Validation** — a read-only API call verifies the credential.  No state-mutating calls are ever made.
+4. **Persistence** — results are UPSERTed into `secrets_validations` keyed on `(secret_hash, provider)`.
+5. **Severity bump** — if any secret is `live`, the finding's severity is raised to at least the provider's bump floor (see below) and `validated-secret:<provider>` tags are added.
+
+#### Severity bumping rules
+
+| Provider category | Providers | Minimum severity |
+|---|---|---|
+| Cloud / payments | `aws`, `gcp`, `azure`, `stripe`, `paypal`, `razorpay`, `shopify` | **950** (critical) |
+| Source control | `github`, `gitlab` | **850** (critical) |
+| Email / comms | `sendgrid`, `mailgun`, `twilio` | **800** (critical) |
+| Chat | `slack`, `discord` | **700** (high) |
+| Unknown provider | *(any unregistered)* | **750** (high) |
+
+### Configuration
+
+All settings are read from environment variables (or `.env`):
+
+| Env var | Default | Description |
+|---|---|---|
+| `SECRET_VALIDATION_ENABLED` | `true` | Enable/disable the entire pipeline |
+| `SECRET_VALIDATION_CACHE_TTL_DAYS` | `7` | Days before a cached result expires |
+| `SECRET_VALIDATION_MAX_CONCURRENT` | `5` | Max concurrent validator API calls per finding |
+
+### CLI commands
+
+```bash
+# List recent secret validations
+bounty secrets list --limit 20
+
+# Filter by status
+bounty secrets list --status live
+
+# Filter by provider
+bounty secrets list --provider stripe
+
+# Filter by finding
+bounty secrets list --finding 01JXYZ...
+
+# Show full detail for a specific record (use id prefix or full id)
+bounty secrets show 01JXYZ...
+
+# Force re-validation of a record (bypasses cache)
+# Note: raw secret values are never stored; re-validation uses the stored hash
+# and will typically return 'invalid' for HTTP-based providers.
+bounty secrets revalidate 01JXYZ...
+
+# Show counts grouped by provider and status
+bounty secrets stats
+```
+
+### Example output
+
+```
+By provider:
+  aws                      3
+  stripe                   2
+  github                   1
+
+By status:
+  invalid                  5
+  error                    1
+```
+

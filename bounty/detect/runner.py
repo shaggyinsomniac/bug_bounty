@@ -199,6 +199,20 @@ async def run_detections(
                     finding = await _persist_finding(draft, conn)
                     await _link_evidence(finding.id or "", evidence_pkgs, conn)
 
+                # ── Secret scanning + validation (inline, best-effort) ──────
+                if evidence_pkgs:
+                    try:
+                        from bounty.secrets import process_finding_secrets
+                        import httpx as _httpx
+                        _settings = get_settings()
+                        async with get_conn(db_path) as _sv_conn:
+                            async with _httpx.AsyncClient(timeout=15) as _http:
+                                await process_finding_secrets(
+                                    finding, evidence_pkgs, _sv_conn, _http, _settings
+                                )
+                    except Exception as _sec_exc:  # noqa: BLE001
+                        det_log.warning("secret_scan_error", error=str(_sec_exc))
+
                 await publish(
                     "finding.discovered",
                     {
