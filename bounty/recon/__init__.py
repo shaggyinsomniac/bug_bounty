@@ -25,10 +25,12 @@ but do not abort the pipeline.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 from typing import Any
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 from bounty import get_logger
 from bounty.config import get_settings
@@ -38,7 +40,7 @@ from bounty.exceptions import ToolMissingError
 from bounty.fingerprint import fingerprint_asset
 from bounty.models import Asset, Target
 from bounty.recon.http_probe import probe
-from bounty.recon.ip_ranges import expand_asn, expand_cidr, is_internal_ip
+from bounty.recon.ip_ranges import expand_asn, expand_cidr
 from bounty.recon.port_scan import OpenPort, scan_ports
 from bounty.recon.resolve import ResolveResult, resolve_batch
 from bounty.recon.subdomains import enumerate as enumerate_subdomains
@@ -649,31 +651,40 @@ async def recon_pipeline(
     pipeline_error: str | None = None
     probes_completed: int = 0
 
-    # Determine target mix — controls which phases are relevant.
+    # Determine target mix — controls which pipeline phases are relevant.
     in_scope_targets = [t for t in targets if t.scope_type == "in_scope"]
-    has_domains = any(t.asset_type in ("url", "wildcard") for t in in_scope_targets)
-    has_ips = any(t.asset_type in ("ip", "cidr", "asn") for t in in_scope_targets)
+
+    # Wildcard targets and bare-hostname url targets seed subdomain enumeration
+    # + DNS resolution.  Full URL targets (containing "://") are concrete
+    # endpoints and are probed directly without enumeration.
+    def _is_url_with_scheme(value: str) -> bool:
+        return "://" in value
+
+    has_wildcard_domains = any(
+        t.asset_type == "wildcard"
+        or (t.asset_type == "url" and not _is_url_with_scheme(t.value))
+        for t in in_scope_targets
+    )
 
     # ── IP-range targets: collect direct IPs before subdomain phases ─────────
-    # These are scope entries with asset_type in ('ip', 'cidr', 'asn').
-    # They bypass subdomain enumeration and DNS resolution.
+    # These bypass subdomain enumeration and DNS resolution.
+    # No internal-IP filter — the operator decides what's reachable.
     direct_ips: set[str] = set()
+    # Full URL targets: concrete (scheme, host, port) endpoints to probe exactly.
+    # No subfinder/DNS enumeration; port is taken from the URL literally.
+    direct_url_probes: list[tuple[str, str, int]] = []
 
     try:
-        # ── Phase 0: Expand IP / CIDR / ASN targets ───────────────────────────
+        # ── Phase 0: Expand / collect all IP, CIDR, ASN, and URL targets ─────
+        # Returns all IPs without filtering. Operator decides what's reachable.
         for t in in_scope_targets:
             if t.asset_type == "ip":
                 ip = t.value.strip()
-                if not is_internal_ip(ip):
-                    direct_ips.add(ip)
-                else:
-                    bound_log.debug("skip_internal_ip", ip=ip)
+                direct_ips.add(ip)
             elif t.asset_type == "cidr":
                 try:
                     expanded = await expand_cidr(t.value)
-                    for ip in expanded:
-                        if not is_internal_ip(ip):
-                            direct_ips.add(ip)
+                    direct_ips.update(expanded)
                 except (ValueError, NotImplementedError) as exc:
                     bound_log.warning("cidr_expansion_failed", value=t.value, error=str(exc))
             elif t.asset_type == "asn":
@@ -681,38 +692,70 @@ async def recon_pipeline(
                     cidrs = await expand_asn(t.value)
                     for cidr in cidrs:
                         try:
-                            for ip in await expand_cidr(cidr):
-                                if not is_internal_ip(ip):
-                                    direct_ips.add(ip)
+                            direct_ips.update(await expand_cidr(cidr))
                         except (ValueError, NotImplementedError):
                             pass  # CIDRs too large or IPv6 — skip silently
                 except ValueError as exc:
                     bound_log.warning("asn_expansion_failed", value=t.value, error=str(exc))
+            elif t.asset_type == "url":
+                # Only full URL targets (with scheme) are concrete endpoints.
+                # Bare-hostname url targets (no "://") are domain seeds and
+                # get handled in Phase 1 via the has_wildcard_domains path.
+                if _is_url_with_scheme(t.value):
+                    parsed = urlparse(t.value)
+                    raw_host = (parsed.hostname or "").strip()
+                    explicit_port = parsed.port
+                    scheme = (parsed.scheme or "https").lower()
+                    if raw_host:
+                        effective_port = explicit_port or (443 if scheme == "https" else 80)
+                        direct_url_probes.append((scheme, raw_host, effective_port))
+                        bound_log.debug(
+                            "url_target_queued",
+                            url=t.value, scheme=scheme, host=raw_host, port=effective_port,
+                        )
 
         if direct_ips:
             bound_log.info("direct_ips_collected", count=len(direct_ips))
+        if direct_url_probes:
+            bound_log.info("direct_url_probes_collected", count=len(direct_url_probes))
 
-        # ── Phase 1: Subdomain enumeration (domain targets only) ─────────────
+        # ── Phase 1: Subdomain enumeration (wildcard + bare-hostname url targets) ─
         alive_hosts: dict[str, ResolveResult] = {}
 
-        if has_domains:
+        if has_wildcard_domains:
             await _update_scan_phase(effective_db, scan_id, "recon", "running")
 
-            in_scope_domains = [
-                t.value.lstrip("*.") for t in targets
+            # Extract the bare domain from wildcard targets.
+            # Defense-in-depth: strip URL scheme or path if accidentally present.
+            def _sanitise_domain(raw: str) -> str:
+                s = raw.lstrip("*.")
+                if "://" in s:
+                    s = (urlparse(s).hostname or s)
+                return s.split("/")[0].strip()
+
+            # Wildcard targets → seed subfinder
+            in_scope_domains = list(dict.fromkeys(
+                _sanitise_domain(t.value)
+                for t in targets
                 if t.scope_type == "in_scope"
-                and t.asset_type in ("wildcard", "url")
-                and "." in t.value
-            ]
+                and t.asset_type == "wildcard"
+                and "." in t.value.lstrip("*.")
+            ))
 
-            # Seed with exact domains even without subfinder
+            # Seed discovered_hosts: wildcard domains + bare-hostname url values.
             for t in targets:
-                if t.scope_type == "in_scope" and t.asset_type in ("url", "wildcard"):
-                    host = t.value.lstrip("*.")
-                    if host:
-                        discovered_hosts.add(host.lower())
+                if t.scope_type == "in_scope":
+                    if t.asset_type == "wildcard":
+                        host = _sanitise_domain(t.value)
+                        if host:
+                            discovered_hosts.add(host.lower())
+                    elif t.asset_type == "url" and not _is_url_with_scheme(t.value):
+                        # Bare hostname in url target — resolve it like a domain.
+                        host = t.value.strip().lower()
+                        if host:
+                            discovered_hosts.add(host)
 
-            for domain in list(dict.fromkeys(in_scope_domains)):
+            for domain in in_scope_domains:
                 try:
                     async for hostname in enumerate_subdomains(
                         domain,
@@ -767,8 +810,8 @@ async def recon_pipeline(
                 {"total": len(resolve_results), "alive": len(alive_hosts)},
             )
         else:
-            # IP-only scan: enumerate and resolve phases are not relevant.
-            bound_log.info("skip_domain_phases", reason="no domain targets in scope")
+            # IP-only / URL-only scan: enumerate and resolve phases not relevant.
+            bound_log.info("skip_domain_phases", reason="no wildcard domain targets in scope")
 
         # ── Phase 3: Port scan (intensity != gentle) ──────────────────────────
         open_ports_by_ip: dict[str, list[OpenPort]] = {}
@@ -855,6 +898,7 @@ async def recon_pipeline(
         # Per-scan unreachability tracking for direct IP probing
         fast_fail_counts: dict[str, int] = {}
         unreachable_ips: set[str] = set()
+        successful_ips: set[str] = set()  # IPs with at least one successful probe
 
         async def _probe_direct_ip(ip: str) -> None:
             """Probe a direct IP target at standard + extra web ports."""
@@ -884,9 +928,12 @@ async def recon_pipeline(
                 result = await probe(url, verify=False)
 
                 if not result.ok:
-                    # Fast failure (<3 s) = host is not answering at all.
-                    # Mark unreachable after two consecutive fast fails.
-                    if result.elapsed_ms < 3_000:
+                    # Fast failure (<3 s) = host is not answering on this port.
+                    # Only mark as unreachable if NO probe has succeeded yet — once
+                    # the IP has responded on any port it is clearly reachable and
+                    # we should not skip remaining ports (e.g. port 8000 after a
+                    # success on 443 and fast-fails on 80/8080).
+                    if result.elapsed_ms < 3_000 and ip not in successful_ips:
                         fast_fail_counts[ip] = fast_fail_counts.get(ip, 0) + 1
                         if fast_fail_counts[ip] >= 2:
                             unreachable_ips.add(ip)
@@ -897,6 +944,7 @@ async def recon_pipeline(
                     ip_log.debug("probe_failed", url=url, error=result.error)
                     continue
 
+                successful_ips.add(ip)
                 fast_fail_counts[ip] = 0  # reset on success
                 title = _extract_title(result.body_text)
                 asset_id = await _upsert_asset(
@@ -926,7 +974,66 @@ async def recon_pipeline(
 
         probe_tasks = [asyncio.create_task(_probe_host(h, r)) for h, r in alive_hosts.items()]
         ip_tasks = [asyncio.create_task(_probe_direct_ip(ip)) for ip in direct_ips]
-        all_probe_tasks = probe_tasks + ip_tasks
+
+        async def _probe_url_target(scheme: str, host: str, port: int) -> None:
+            """Probe a concrete URL target at the exact (scheme, host, port) given.
+
+            Skips extra-port probing — the URL specification is authoritative.
+            Resolves the hostname for the IP field when host is not already an IP.
+            """
+            nonlocal probes_completed
+            url = _asset_url(scheme, host, port)
+            url_log = bound_log.bind(url=url, host=host, port=port)
+            probes_completed += 1
+            result = await probe(url, verify=False)
+            if not result.ok:
+                url_log.debug("probe_failed", error=result.error)
+                return
+
+            # Best-effort IP resolution (for asset row metadata only).
+            resolved_ip: str | None = None
+            try:
+                ipaddress.ip_address(host)
+                resolved_ip = host  # host is already an IP literal
+            except ValueError:
+                # Hostname — resolve it once for the ip column.
+                try:
+                    rr = await resolve_batch([host], concurrency=1)
+                    resolved_ip = rr[host].primary_ip if host in rr and rr[host].alive else None
+                except Exception:  # noqa: BLE001
+                    pass
+
+            title = _extract_title(result.body_text)
+            asset_id = await _upsert_asset(
+                effective_db,
+                program_id=program_id,
+                host=host,
+                scheme=scheme,
+                port=port,
+                ip=resolved_ip,
+                http_status=result.status_code,
+                title=title,
+                server=result.server or None,
+                tags=["url_target"],
+            )
+            if asset_id:
+                asset_ids.append(asset_id)
+                await publish(
+                    "asset:updated",
+                    {
+                        "asset_id": asset_id,
+                        "url": url,
+                        "status_code": result.status_code,
+                        "program_id": program_id,
+                    },
+                    program_id=program_id,
+                )
+
+        url_tasks = [
+            asyncio.create_task(_probe_url_target(s, h, p))
+            for s, h, p in direct_url_probes
+        ]
+        all_probe_tasks = probe_tasks + ip_tasks + url_tasks
         if all_probe_tasks:
             await asyncio.gather(*all_probe_tasks, return_exceptions=True)
 
@@ -979,5 +1086,5 @@ async def recon_pipeline(
         scan_id=scan_id,
         status="failed" if pipeline_error else "completed",
     )
-    return {"assets": asset_ids, "failed_hosts": []}
+    return {"assets": list(dict.fromkeys(asset_ids)), "failed_hosts": []}
 

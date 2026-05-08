@@ -421,6 +421,219 @@ async def test_migration_v3_deduplicates_existing_rows(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 4.1 — BUG 1: Internal IPs not filtered; BUG 2: URL target handling
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pipeline_scans_loopback_ip(tmp_path: Path) -> None:
+    """Loopback 127.0.0.1 must NOT be filtered out — pipeline must probe it.
+
+    Previously is_internal_ip() would drop it silently.  After Phase 4.1 fix
+    the probe function must be called with a URL containing 127.0.0.1.
+    """
+    from bounty.models import ProbeResult
+
+    db_path = await _setup_db(tmp_path)
+    probed_urls: list[str] = []
+
+    async def _capture_probe(url: str, **kwargs: object) -> ProbeResult:
+        probed_urls.append(url)
+        return ProbeResult(
+            url=url, final_url=url, status_code=0, headers={},
+            body=b"", body_text="", error="connection refused", elapsed_ms=5.0,
+        )
+
+    targets = [
+        Target(
+            program_id="test:p28",
+            scope_type="in_scope",
+            asset_type="ip",
+            value="127.0.0.1",
+        )
+    ]
+
+    with patch("bounty.recon.probe", side_effect=_capture_probe):
+        await recon_pipeline(
+            "test:p28",
+            targets,
+            intensity="gentle",
+            db_path=db_path,
+        )
+
+    # At minimum https://127.0.0.1 must have been attempted.
+    assert any("127.0.0.1" in u for u in probed_urls), (
+        f"127.0.0.1 was never probed. Probed URLs: {probed_urls}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_handles_url_target_with_port(tmp_path: Path) -> None:
+    """URL target 'http://127.0.0.1:8000' must probe *only* http://127.0.0.1:8000.
+
+    Must NOT invoke subfinder, must NOT probe https://127.0.0.1 or other ports.
+    """
+    from bounty.models import ProbeResult
+
+    db_path = await _setup_db(tmp_path)
+    probed_urls: list[str] = []
+
+    async def _capture_probe(url: str, **kwargs: object) -> ProbeResult:
+        probed_urls.append(url)
+        return ProbeResult(
+            url=url, final_url=url, status_code=200, headers={},
+            body=b"<html><title>ok</title></html>",
+            body_text="<html><title>ok</title></html>",
+            ip="127.0.0.1", elapsed_ms=5.0,
+        )
+
+    targets = [
+        Target(
+            program_id="test:p28",
+            scope_type="in_scope",
+            asset_type="url",
+            value="http://127.0.0.1:8000",
+        )
+    ]
+
+    with (
+        patch("bounty.recon.probe", side_effect=_capture_probe),
+        patch("bounty.recon.resolve_batch", return_value={}),
+    ):
+        result = await recon_pipeline(
+            "test:p28",
+            targets,
+            intensity="gentle",
+            db_path=db_path,
+        )
+
+    # Exactly this URL must have been probed (no other ports/schemes).
+    assert "http://127.0.0.1:8000" in probed_urls, (
+        f"Expected http://127.0.0.1:8000 in probed URLs, got: {probed_urls}"
+    )
+    # Must not probe extra ports (8080, 443, etc.) for URL targets.
+    assert not any(
+        "127.0.0.1:443" in u or "127.0.0.1:8080" in u or "https://127.0.0.1" in u
+        for u in probed_urls
+    ), f"URL target probed unexpected extra ports: {probed_urls}"
+    # Asset must be persisted.
+    assert result["assets"], "Expected asset to be persisted for URL target"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_handles_url_target_hostname(tmp_path: Path) -> None:
+    """URL target 'https://example.com' must probe that exact URL.
+
+    The hostname is resolved (mocked) and the exact URL is probed.
+    No subfinder enumeration should run.
+    """
+    from bounty.models import ProbeResult
+
+    db_path = await _setup_db(tmp_path)
+    probed_urls: list[str] = []
+
+    async def _capture_probe(url: str, **kwargs: object) -> ProbeResult:
+        probed_urls.append(url)
+        return ProbeResult(
+            url=url, final_url=url, status_code=200, headers={},
+            body=b"<html><title>test</title></html>",
+            body_text="<html><title>test</title></html>",
+            ip="1.2.3.4", elapsed_ms=5.0,
+        )
+
+    targets = [
+        Target(
+            program_id="test:p28",
+            scope_type="in_scope",
+            asset_type="url",
+            value="https://example.com",
+        )
+    ]
+
+    with (
+        patch("bounty.recon.probe", side_effect=_capture_probe),
+        patch("bounty.recon.resolve_batch", return_value={}),
+    ):
+        result = await recon_pipeline(
+            "test:p28",
+            targets,
+            intensity="gentle",
+            db_path=db_path,
+        )
+
+    # https://example.com (port 443) must have been probed.
+    assert "https://example.com" in probed_urls, (
+        f"Expected https://example.com in probed URLs, got: {probed_urls}"
+    )
+    assert result["assets"], "Expected asset to be persisted for URL target"
+
+
+@pytest.mark.asyncio
+async def test_subfinder_strips_url_scheme(tmp_path: Path) -> None:
+    """Wildcard target 'https://example.com' must give subfinder 'example.com'.
+
+    Defense-in-depth: even if a wildcard value accidentally contains a scheme,
+    subfinder must receive only the bare domain.
+    """
+    from bounty.recon.subdomains import enumerate as enumerate_subdomains_real
+
+    received_domains: list[str] = []
+
+    def _mock_enumerate(
+        domain: str,
+        intensity: str = "gentle",
+        known_hosts: set[str] | None = None,
+    ) -> AsyncMockIter:
+        received_domains.append(domain)
+        return AsyncMockIter([])
+
+    db_path = await _setup_db(tmp_path)
+
+    targets = [
+        Target(
+            program_id="test:p28",
+            scope_type="in_scope",
+            asset_type="wildcard",
+            value="https://example.com",
+        )
+    ]
+
+    from bounty.models import ProbeResult
+    from bounty.recon.resolve import ResolveResult
+
+    async def _fail_probe(url: str, **kwargs: object) -> ProbeResult:
+        return ProbeResult(
+            url=url, final_url=url, status_code=0, headers={},
+            body=b"", body_text="", error="refuse", elapsed_ms=5.0,
+        )
+
+    fake_resolve: dict[str, ResolveResult] = {
+        "example.com": ResolveResult(
+            hostname="example.com", a_records=["1.2.3.4"], alive=False
+        )
+    }
+
+    with (
+        patch("bounty.recon.enumerate_subdomains", side_effect=_mock_enumerate),
+        patch("bounty.recon.probe", side_effect=_fail_probe),
+        patch("bounty.recon.resolve_batch", return_value=fake_resolve),
+    ):
+        await recon_pipeline(
+            "test:p28",
+            targets,
+            intensity="gentle",
+            db_path=db_path,
+        )
+
+    # subfinder must receive the bare domain, not the full URL.
+    assert received_domains, "enumerate_subdomains was never called"
+    for d in received_domains:
+        assert "://" not in d, (
+            f"subfinder received URL scheme — expected bare domain, got: {d!r}"
+        )
+        assert d == "example.com", f"Expected 'example.com', got {d!r}"
+
+
+# ---------------------------------------------------------------------------
 # Helper: async iterable mock
 # ---------------------------------------------------------------------------
 
