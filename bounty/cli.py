@@ -1571,6 +1571,45 @@ def secrets_stats(
         typer.echo(f"  {str(row['status']):<12}  {row['cnt']:>4}")
 
 
+# ---------------------------------------------------------------------------
+# serve
+# ---------------------------------------------------------------------------
+
+@app.command("serve")
+def serve_cmd(
+    host: Annotated[str, typer.Option("--host", help="Interface to bind to")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", "-p", help="TCP port")] = 8765,
+    reload: Annotated[bool, typer.Option("--reload", help="Enable hot-reload (dev only)")] = False,
+) -> None:
+    """Start the Bounty web UI server.
+
+    Visit http://<HOST>:<PORT>/ in your browser.
+    Set UI_TOKEN env var to enable authentication in production.
+    """
+    import uvicorn  # type: ignore[import]
+
+    settings = get_settings()
+    db_path = settings.db_path
+
+    # Ensure the DB is ready before uvicorn starts serving requests.
+    init_db(db_path)
+    apply_migrations(db_path)
+
+    typer.echo(f"[bounty serve] starting at http://{host}:{port}/")
+    typer.echo(f"[bounty serve] database: {db_path}")
+    if settings.ui_token:
+        typer.echo("[bounty serve] auth: UI_TOKEN is set")
+    else:
+        typer.echo("[bounty serve] auth: disabled (set UI_TOKEN to enable)")
+
+    uvicorn.run(
+        "bounty.ui.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )
+
+
 if __name__ == "__main__":
     app()
 

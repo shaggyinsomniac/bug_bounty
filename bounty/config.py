@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     port: int = 8000
     """TCP port for the FastAPI UI server."""
 
+    # --------------------------------------------------------- UI / auth
+    ui_token: str | None = None
+    """Bearer token protecting the UI and API routes.  None = auth disabled (dev mode)."""
+
+    dev_mode: bool = True
+    """Enable development mode: permissive CORS, auth disabled when ui_token is unset."""
+
     # --------------------------------------------------------- intel / Shodan
     shodan_api_key: str = ""
     """Shodan API key.  Empty string disables Shodan features.  Set via SHODAN_API_KEY env var."""
@@ -144,6 +151,16 @@ class Settings(BaseSettings):
     def intel_cache_dir(self) -> Path:
         """Absolute path to the intel/Shodan result cache directory."""
         return self.data_dir / "intel_cache"
+
+    @property
+    def ui_static_dir(self) -> Path:
+        """Absolute path to the UI static files directory."""
+        return Path(__file__).parent / "ui" / "static"
+
+    @property
+    def ui_templates_dir(self) -> Path:
+        """Absolute path to the UI Jinja2 templates directory."""
+        return Path(__file__).parent / "ui" / "templates"
 
     def ensure_dirs(self) -> None:
         """Create data, evidence, and intel_cache directories if they do not exist."""
