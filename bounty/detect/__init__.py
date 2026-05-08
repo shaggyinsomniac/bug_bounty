@@ -11,15 +11,40 @@ To add a new detection:
 
 from __future__ import annotations
 
+from bounty.detect.admin_panels import (
+    AdminerLoginExposed,
+    AirflowAnonymousAccess,
+    AirflowConfigExposed,
+    ArgoCDAnonymousAccess,
+    ConsulAPIExposed,
+    ElasticsearchClusterExposed,
+    ElasticsearchIndicesExposed,
+    GiteaPublicReposExposed,
+    GitLabPublicProjectsExposed,
+    GrafanaAnonymousAccess,
+    GrafanaSnapshotExposed,
+    HarborRegistryExposed,
+    JenkinsAnonymousDashboard,
+    JenkinsBuildHistoryExposed,
+    JenkinsScriptConsole,
+    K8sDashboardExposed,
+    KibanaAnonymousAccess,
+    NexusRepositoryExposed,
+    PhpMyAdminLoginExposed,
+    PortainerAPIExposed,
+    PrometheusMetricsExposed,
+    RabbitMQManagementExposed,
+    SonarQubeAnonymousAccess,
+    SolrAdminConsole,
+    SolrCoresExposed,
+    VaultUIExposed,
+)
 from bounty.detect.base import Detection, DetectionContext, DetectionError
-from bounty.detect.exposed_files.source_control import (
-    ExposedBzrDirectory,
-    ExposedGitCredentials,
-    ExposedGitDirectory,
-    ExposedGitlabCi,
-    ExposedGithubWorkflows,
-    ExposedHgDirectory,
-    ExposedSvnDirectory,
+from bounty.detect.exposed_files.backups import (
+    ExposedDatabaseDump,
+    ExposedEditorSwap,
+    ExposedFilesystemBackup,
+    ExposedSourceMap,
 )
 from bounty.detect.exposed_files.env_config import (
     ExposedConfigPhp,
@@ -33,11 +58,14 @@ from bounty.detect.exposed_files.env_config import (
     ExposedTerraformState,
     ExposedWpConfigBackup,
 )
-from bounty.detect.exposed_files.backups import (
-    ExposedDatabaseDump,
-    ExposedEditorSwap,
-    ExposedFilesystemBackup,
-    ExposedSourceMap,
+from bounty.detect.exposed_files.source_control import (
+    ExposedBzrDirectory,
+    ExposedGitCredentials,
+    ExposedGitDirectory,
+    ExposedGitlabCi,
+    ExposedGithubWorkflows,
+    ExposedHgDirectory,
+    ExposedSvnDirectory,
 )
 
 __all__ = [
@@ -76,5 +104,32 @@ REGISTERED_DETECTIONS: list[Detection] = [
     ExposedFilesystemBackup(),
     ExposedSourceMap(),
     ExposedEditorSwap(),
+    # ── Category 4: Admin panel exposures (26) ───────────────────────────
+    JenkinsAnonymousDashboard(),
+    JenkinsScriptConsole(),
+    JenkinsBuildHistoryExposed(),
+    GrafanaAnonymousAccess(),
+    GrafanaSnapshotExposed(),
+    KibanaAnonymousAccess(),
+    PhpMyAdminLoginExposed(),
+    AdminerLoginExposed(),
+    SolrAdminConsole(),
+    SolrCoresExposed(),
+    AirflowAnonymousAccess(),
+    AirflowConfigExposed(),
+    ArgoCDAnonymousAccess(),
+    RabbitMQManagementExposed(),
+    VaultUIExposed(),
+    ConsulAPIExposed(),
+    ElasticsearchClusterExposed(),
+    ElasticsearchIndicesExposed(),
+    PrometheusMetricsExposed(),
+    K8sDashboardExposed(),
+    PortainerAPIExposed(),
+    SonarQubeAnonymousAccess(),
+    HarborRegistryExposed(),
+    NexusRepositoryExposed(),
+    GitLabPublicProjectsExposed(),
+    GiteaPublicReposExposed(),
 ]
 

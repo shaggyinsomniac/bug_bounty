@@ -60,12 +60,66 @@ LOG_FORMAT=console     # console (pretty) or json (structured)
 
 ---
 
+## Current Capabilities (Phase 6 — Admin Panel Detections)
+
+### Admin Panel Detections (Phase 6)
+
+Phase 6 extends the detection engine with **26 fingerprint-gated admin panel checks** across 21 technology modules.  Detections only run when the relevant tech is fingerprinted during the earlier reconnaissance stage, keeping scans efficient and targeted.
+
+> **Fingerprint gating**: `applicable_to()` calls `has_tech(fingerprints, "<tech>")` from `bounty/detect/_fingerprint_helpers.py`. If the fingerprint stage did not detect the relevant technology at `weak` confidence or above, the detection is skipped entirely — zero HTTP probes are made.
+
+#### Admin Panel Detections — 26 checks
+
+| Module | Detection ID | Probe Path | Default Severity |
+|---|---|---|---|
+| Jenkins | `admin_panel.jenkins.anonymous_dashboard` | `/api/json` | 700–900 |
+| Jenkins | `admin_panel.jenkins.script_console` | `/script` | 950 (critical) |
+| Jenkins | `admin_panel.jenkins.build_history` | `/api/json?tree=...` | 600–800 |
+| Grafana | `admin_panel.grafana.anonymous` | `/api/datasources` | 600–800 |
+| Grafana | `admin_panel.grafana.snapshots` | `/api/snapshots` | 500 (medium) |
+| Kibana | `admin_panel.kibana.anonymous` | `/api/status` | 800 (critical) |
+| phpMyAdmin | `admin_panel.phpmyadmin.login_exposed` | `/` | 400 (medium) |
+| Adminer | `admin_panel.adminer.login_exposed` | `/` | 400 (medium) |
+| Apache Solr | `admin_panel.solr.admin_console` | `/solr/` | 700 (high) |
+| Apache Solr | `admin_panel.solr.cores_exposed` | `/solr/admin/cores` | 800 (critical) |
+| Apache Airflow | `admin_panel.airflow.anonymous` | `/api/v1/dags` | 850 (critical) |
+| Apache Airflow | `admin_panel.airflow.config_exposed` | `/config` | 900 (critical) |
+| Argo CD | `admin_panel.argocd.anonymous` | `/api/v1/applications` | 900 (critical) |
+| RabbitMQ | `admin_panel.rabbitmq.mgmt_exposed` | `/api/overview` | 700 (high) |
+| HashiCorp Vault | `admin_panel.vault.ui_exposed` | `/v1/sys/health` | 500–700 |
+| HashiCorp Consul | `admin_panel.consul.api_exposed` | `/v1/agent/self` | 700–850 |
+| Elasticsearch | `admin_panel.elasticsearch.cluster_exposed` | `/` | 800 (critical) |
+| Elasticsearch | `admin_panel.elasticsearch.indices_exposed` | `/_cat/indices` | 900 (critical) |
+| Prometheus | `admin_panel.prometheus.metrics_exposed` | `/api/v1/status/config` | 600–800 |
+| Kubernetes Dashboard | `admin_panel.k8s_dashboard.exposed` | `/api/v1/login/status` or `/` | 950 (critical) |
+| Portainer | `admin_panel.portainer.api_exposed` | `/api/endpoints` | 800 (critical) |
+| SonarQube | `admin_panel.sonarqube.anonymous` | `/api/projects/search` | 600 (high) |
+| Harbor | `admin_panel.harbor.registry_exposed` | `/api/v2.0/projects` | 700 (high) |
+| Nexus | `admin_panel.nexus.repository_exposed` | `/service/rest/v1/repositories` | 600 (high) |
+| GitLab | `admin_panel.gitlab.public_projects` | `/api/v4/projects` | 300–700 |
+| Gitea | `admin_panel.gitea.public_repos` | `/api/v1/repos/search` | 300–700 |
+
+#### CLI usage (findings work as before — no new commands needed)
+
+```bash
+# List all admin panel findings
+bounty findings list --severity high
+
+# Show a specific finding
+bounty findings show 01JXYZ...
+
+# Count findings by category
+bounty findings count
+```
+
+---
+
 ## Current Capabilities (Phase 4 — Detection Engine)
 
 ### Detection Engine (Phase 4)
 
 After fingerprinting, every live asset is scanned by the detection engine.
-The runner iterates `REGISTERED_DETECTIONS` (21 checks across 3 categories)
+The runner iterates `REGISTERED_DETECTIONS` (47 checks across 4 categories)
 and persists confirmed vulnerabilities as `findings` rows with full evidence.
 
 #### Detection Registry — 21 checks
@@ -357,10 +411,10 @@ bounty/
 1. **Phase 1** ✅ — DB schema, HTTP probe, EventBus SSE
 2. **Phase 2** ✅ — Recon pipeline (subfinder, DNS, port scan, HTTP probe)
 3. **Phase 2.5** ✅ — Integration bug fix, crt.sh, ULID ids, smoke CLI
-4. **Phase 3** — Technology fingerprinting (Wappalyzer categories, favicon hash)
-5. **Phase 4** — Detection base class + Nuclei runner integration
-6. **Phase 5** — Detection modules (admin panels, cloud misconfigs, secrets scanner)
-7. **Phase 6** — Token validators (50+ providers: AWS, Stripe, GitHub, …)
+4. **Phase 3** ✅ — Technology fingerprinting (Wappalyzer categories, favicon hash)
+5. **Phase 4** ✅ — Detection base class + exposed-file detections (21 checks)
+6. **Phase 5** ✅ — Token validators (50+ providers: AWS, Stripe, GitHub, …) + secret scanning
+7. **Phase 6** ✅ — Admin panel detections (26 fingerprint-gated checks across 21 modules)
 8. **Phase 7** — Evidence capture (Playwright screenshots, HAR), triage, reporting
 9. **Phase 8** — Scheduler (APScheduler) for automated periodic scans
 10. **Phase 9** — UI base (FastAPI + Jinja2 dashboard skeleton)
