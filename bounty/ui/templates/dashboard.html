@@ -1,0 +1,175 @@
+{% extends "_base.html" %}
+{% from "components/severity_badge.html" import severity_badge %}
+{% from "components/scan_row.html" import scan_row %}
+{% from "components/finding_row.html" import finding_row %}
+{% from "components/empty_state.html" import empty_state %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Page header -->
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-slate-100">Dashboard</h1>
+    <span class="text-xs text-slate-500">Auto-refreshes via SSE</span>
+  </div>
+
+  {% if stats.programs == 0 %}
+    <!-- Empty state — no programs yet -->
+    {{ empty_state('🎯', 'No programs yet',
+       'Add your first bug bounty program to start scanning.',
+       'Add Program', '/programs') }}
+  {% else %}
+
+  <!-- ====================================================== KPI CARDS -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+
+    <!-- Programs -->
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+      <div class="text-xs text-slate-400 uppercase tracking-wide mb-1">Programs</div>
+      <div id="kpi-programs" class="text-3xl font-bold text-slate-100">{{ stats.programs }}</div>
+      <div class="text-xs text-slate-500 mt-1">active programs</div>
+    </div>
+
+    <!-- Assets -->
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+      <div class="text-xs text-slate-400 uppercase tracking-wide mb-1">Assets</div>
+      <div id="kpi-assets" class="text-3xl font-bold text-slate-100">{{ stats.assets }}</div>
+      <div class="text-xs text-slate-500 mt-1">discovered hosts</div>
+    </div>
+
+    <!-- Findings -->
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+      <div class="text-xs text-slate-400 uppercase tracking-wide mb-1">Open Findings</div>
+      <div id="kpi-findings" class="text-3xl font-bold text-slate-100">{{ stats.open_findings }}</div>
+      <div class="flex gap-1 flex-wrap mt-2">
+        {% for sev in ['critical','high','medium','low','info'] %}
+          {% set cnt = stats.findings_by_severity.get(sev, 0) %}
+          {% if cnt > 0 %}
+            {{ severity_badge(sev) }}
+            <span class="text-xs text-slate-400 self-center">{{ cnt }}</span>
+          {% endif %}
+        {% endfor %}
+        {% if stats.open_findings == 0 %}
+          <span class="text-xs text-slate-500">none</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Live Secrets -->
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-4
+                {% if stats.live_secrets > 0 %}border-red-700{% endif %}">
+      <div class="text-xs text-slate-400 uppercase tracking-wide mb-1">Live Secrets</div>
+      <div id="kpi-secrets"
+           class="text-3xl font-bold {% if stats.live_secrets > 0 %}text-red-400 animate-pulse{% else %}text-slate-100{% endif %}">
+        {{ stats.live_secrets }}
+      </div>
+      <div class="text-xs text-slate-500 mt-1">validated tokens</div>
+    </div>
+
+  </div>
+
+  <!-- ====================================================== RECENT SCANS -->
+  <section>
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-lg font-semibold text-slate-200">Recent Scans</h2>
+      <a href="/scans" class="text-sm text-blue-400 hover:text-blue-300">View all →</a>
+    </div>
+
+    <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+      {% if recent_scans %}
+        <table class="w-full text-sm"
+               hx-get="/scans?htmx=1"
+               hx-trigger="every 10s"
+               hx-target="#recent-scans-table"
+               hx-swap="outerHTML">
+          <thead>
+            <tr class="text-xs text-slate-400 uppercase border-b border-slate-700">
+              <th class="px-3 py-2 text-left">ID</th>
+              <th class="px-3 py-2 text-left">Program</th>
+              <th class="px-3 py-2 text-left">Type</th>
+              <th class="px-3 py-2 text-left">Status</th>
+              <th class="px-3 py-2 text-left">Intensity</th>
+              <th class="px-3 py-2 text-left">Started</th>
+              <th class="px-3 py-2 text-right"></th>
+            </tr>
+          </thead>
+          <tbody id="recent-scans-table">
+            {% for s in recent_scans %}
+              {{ scan_row(s) }}
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="p-8 text-center text-slate-400 text-sm">
+          No scans yet.
+          <a href="/scans" class="text-blue-400 hover:text-blue-300 ml-1">Start a scan →</a>
+        </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <!-- ====================================================== RECENT FINDINGS -->
+  <section>
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-lg font-semibold text-slate-200">Critical &amp; High Findings</h2>
+      <a href="/findings" class="text-sm text-blue-400 hover:text-blue-300">View all →</a>
+    </div>
+
+    <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+      {% if recent_findings %}
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-xs text-slate-400 uppercase border-b border-slate-700">
+              <th class="px-3 py-2 text-left w-24">Severity</th>
+              <th class="px-3 py-2 text-left">Title</th>
+              <th class="px-3 py-2 text-left">URL</th>
+              <th class="px-3 py-2 text-left">Category</th>
+              <th class="px-3 py-2 text-left">Status</th>
+              <th class="px-3 py-2 text-left">Found</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for f in recent_findings %}
+              {{ finding_row(f) }}
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="p-8 text-center text-slate-400 text-sm">✅ No critical or high findings.</div>
+      {% endif %}
+    </div>
+  </section>
+
+  {% endif %}{# end if stats.programs > 0 #}
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Update KPI cards when SSE events arrive
+  document.addEventListener('DOMContentLoaded', () => {
+    // Periodically refresh KPI stats via API
+    setInterval(async () => {
+      try {
+        const r = await fetch('/api/dashboard/stats');
+        if (!r.ok) return;
+        const d = await r.json();
+        const el = id => document.getElementById(id);
+        if (el('kpi-programs')) el('kpi-programs').textContent = d.programs ?? '';
+        if (el('kpi-assets'))   el('kpi-assets').textContent   = d.assets   ?? '';
+        if (el('kpi-findings')) el('kpi-findings').textContent = d.open_findings ?? '';
+        if (el('kpi-secrets')) {
+          el('kpi-secrets').textContent = d.live_secrets ?? '';
+          el('kpi-secrets').className = (d.live_secrets > 0)
+            ? 'text-3xl font-bold text-red-400 animate-pulse'
+            : 'text-3xl font-bold text-slate-100';
+        }
+      } catch (_) {}
+    }, 15000);
+  });
+</script>
+{% endblock %}
+

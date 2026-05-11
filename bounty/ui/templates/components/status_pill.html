@@ -1,0 +1,5 @@
+{% macro status_pill(status) %}
+{% set s = status | lower %}
+<span class="status-{{ s }} inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium">{{ status | replace('_', ' ') | title }}</span>
+{% endmacro %}
+

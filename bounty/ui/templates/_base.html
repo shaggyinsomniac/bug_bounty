@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html class="dark" lang="en" x-data x-init="
+  const t = localStorage.getItem('bounty_theme');
+  if (t === 'light') $el.classList.remove('dark');
+  else $el.classList.add('dark');
+">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Bounty UI{% endblock %} — Bounty</title>
+
+  <!-- Tailwind Play CDN (dev only — replace with purged build for production) -->
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {}
+      }
+    };
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+  <!-- HTMX + SSE extension -->
+  <script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js"></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.1/sse.js"></script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="/static/app.css">
+
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans antialiased">
+
+  <!-- ================================================================ TOP BAR -->
+  <nav class="topbar bg-slate-800 border-b border-slate-700 flex items-center gap-3 px-4">
+    <!-- Logo -->
+    <a href="/" class="flex items-center gap-2 font-bold text-lg text-blue-400 mr-2 hover:text-blue-300">
+      🎯 <span class="hidden sm:inline">Bounty</span>
+    </a>
+
+    <!-- Search -->
+    <div class="flex-1 max-w-sm">
+      <input
+        id="search-input"
+        type="search"
+        placeholder="Search… (/ or ⌘K)"
+        class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-1 text-sm
+               focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+               placeholder-slate-400"
+      >
+    </div>
+
+    <div class="flex-1"></div>
+
+    <!-- Live scan badge (SSE-updated) -->
+    <div id="active-scan-badge" class="text-xs text-slate-400 hidden">
+      <span class="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse mr-1"></span>
+      <span id="active-scan-count">0</span> scanning
+    </div>
+
+    <!-- Theme toggle -->
+    <button onclick="toggleTheme()" title="Toggle theme"
+            class="text-slate-400 hover:text-white p-1 rounded transition-colors">
+      🌙
+    </button>
+
+    <!-- Logout (only shown when auth enabled) -->
+    <a href="/logout" title="Log out"
+       class="text-slate-400 hover:text-white text-sm px-2 py-1 rounded hover:bg-slate-700 transition-colors">
+      Sign out
+    </a>
+  </nav>
+
+  <!-- ================================================================ LAYOUT -->
+  <div class="layout-shell">
+
+    <!-- =================================================== SIDEBAR -->
+    <aside class="sidebar bg-slate-800 border-r border-slate-700 py-4">
+      <nav class="flex flex-col gap-1 px-2">
+        {% set nav_items = [
+          ('/', 'Dashboard', '📊'),
+          ('/scans', 'Scans', '🔍'),
+          ('/assets', 'Assets', '🖥️'),
+          ('/findings', 'Findings', '🐛'),
+          ('/secrets', 'Secrets', '🔑'),
+          ('/programs', 'Programs', '🎯'),
+          ('/reports', 'Reports', '📄'),
+          ('/settings', 'Settings', '⚙️'),
+        ] %}
+        {% for path, label, icon in nav_items %}
+          {% set is_active = (request.url.path == path) or (path != '/' and request.url.path.startswith(path)) %}
+          <a href="{{ path }}"
+             class="flex items-center gap-2 px-3 py-2 rounded text-sm transition-colors
+                    {% if is_active %}bg-blue-600 text-white font-medium
+                    {% else %}text-slate-300 hover:bg-slate-700 hover:text-white{% endif %}">
+            <span>{{ icon }}</span>
+            <span>{{ label }}</span>
+          </a>
+        {% endfor %}
+      </nav>
+    </aside>
+
+    <!-- ================================================ MAIN CONTENT -->
+    <main class="main-content">
+      {% block content %}{% endblock %}
+    </main>
+
+  </div>
+
+  <!-- ================================================================ STATUS BAR -->
+  <div class="statusbar bg-slate-950 border-t border-slate-800 flex items-center px-4 gap-4 text-xs text-slate-500">
+    <span class="flex items-center gap-1">
+      <span id="sse-status-dot" class="inline-block w-2 h-2 rounded-full bg-yellow-500" title="Connecting…"></span>
+      <span>SSE</span>
+    </span>
+    <span id="status-msg" class="flex-1"></span>
+    <span class="text-slate-600">Phase 7.2</span>
+  </div>
+
+  <!-- ================================================================ TOAST CONTAINER -->
+  <div id="toast-container"
+       class="fixed bottom-8 right-4 flex flex-col gap-2 z-50 min-w-64 max-w-sm">
+  </div>
+
+  <!-- ================================================================ SCRIPTS -->
+  <script src="/static/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
+

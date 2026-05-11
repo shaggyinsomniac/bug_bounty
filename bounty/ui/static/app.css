@@ -1,0 +1,153 @@
+/*
+ * bounty/ui/static/app.css
+ * Minimal custom CSS — Tailwind handles 95%. This file adds:
+ *   - CSS custom properties for semantic severity/status colours
+ *   - Animations not available in Tailwind Play CDN out of the box
+ *   - Layout utilities for the fixed status strip
+ *
+ * NOTE: Tailwind Play CDN is used for development.
+ * For production, replace with a purged build (npx tailwindcss ...).
+ */
+
+/* ------------------------------------------------------------------ vars */
+:root {
+  --color-critical:   #dc2626; /* red-600   */
+  --color-high:       #ea580c; /* orange-600 */
+  --color-medium:     #ca8a04; /* yellow-600 */
+  --color-low:        #2563eb; /* blue-600  */
+  --color-info:       #6b7280; /* gray-500  */
+
+  --color-new:        #3b82f6; /* blue-500  */
+  --color-triaged:    #f59e0b; /* amber-500 */
+  --color-reported:   #8b5cf6; /* violet-500 */
+  --color-accepted:   #22c55e; /* green-500 */
+  --color-duplicate:  #9ca3af; /* gray-400  */
+  --color-wont-fix:   #9ca3af;
+  --color-resolved:   #4ade80; /* green-400 */
+
+  /* Layout */
+  --sidebar-width:    14rem;
+  --topbar-height:    3.5rem;
+  --statusbar-height: 1.75rem;
+}
+
+/* ---------------------------------------------------------------- severity badges */
+.severity-critical { background-color: var(--color-critical); color: #fff; }
+.severity-high     { background-color: var(--color-high);     color: #fff; }
+.severity-medium   { background-color: var(--color-medium);   color: #fff; }
+.severity-low      { background-color: var(--color-low);      color: #fff; }
+.severity-info     { background-color: var(--color-info);     color: #fff; }
+
+/* ---------------------------------------------------------------- status pills */
+.status-new       { background-color: var(--color-new);       color: #fff; }
+.status-triaged   { background-color: var(--color-triaged);   color: #fff; }
+.status-reported  { background-color: var(--color-reported);  color: #fff; }
+.status-accepted  { background-color: var(--color-accepted);  color: #fff; }
+.status-duplicate { background-color: var(--color-duplicate); color: #111; }
+.status-wont_fix  { background-color: var(--color-wont-fix);  color: #111; }
+.status-resolved  { background-color: var(--color-resolved);  color: #111; }
+
+/* ---------------------------------------------------------------- animations */
+@keyframes pulse-border {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: .4; }
+}
+
+.animate-pulse-border {
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(110%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+.toast-enter {
+  animation: slide-in-right .25s ease-out forwards;
+}
+
+@keyframes slide-out-right {
+  from { transform: translateX(0);    opacity: 1; }
+  to   { transform: translateX(110%); opacity: 0; }
+}
+
+.toast-exit {
+  animation: slide-out-right .2s ease-in forwards;
+}
+
+/* ---------------------------------------------------------------- layout shell */
+.layout-shell {
+  display: flex;
+  min-height: calc(100vh - var(--topbar-height) - var(--statusbar-height));
+  padding-top: var(--topbar-height);
+  padding-bottom: var(--statusbar-height);
+}
+
+.main-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+  margin-left: var(--sidebar-width);
+}
+
+.sidebar {
+  position: fixed;
+  top: var(--topbar-height);
+  left: 0;
+  width: var(--sidebar-width);
+  height: calc(100vh - var(--topbar-height) - var(--statusbar-height));
+  overflow-y: auto;
+}
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--topbar-height);
+  z-index: 50;
+}
+
+.statusbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--statusbar-height);
+  z-index: 50;
+}
+
+/* ---------------------------------------------------------------- misc utilities */
+.truncate-host {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scan-card-running {
+  border-left: 4px solid #3b82f6;
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+.scan-card-completed { border-left: 4px solid #22c55e; }
+.scan-card-failed    { border-left: 4px solid #dc2626; }
+.scan-card-queued    { border-left: 4px solid #f59e0b; }
+.scan-card-cancelled { border-left: 4px solid #9ca3af; }
+
+/* ---------------------------------------------------------------- phase bar */
+.phase-bar {
+  display: flex;
+  gap: .25rem;
+  align-items: center;
+}
+.phase-bar-step {
+  flex: 1;
+  height: .375rem;
+  border-radius: 9999px;
+  background: #374151; /* gray-700 */
+}
+.phase-bar-step.done    { background: #22c55e; }
+.phase-bar-step.running { background: #3b82f6; animation: pulse-border 1s ease-in-out infinite; }
+.phase-bar-step.failed  { background: #dc2626; }
+

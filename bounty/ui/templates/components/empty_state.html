@@ -1,0 +1,16 @@
+{% macro empty_state(icon='📭', heading='Nothing here yet', body='', cta_label='', cta_href='') %}
+<div class="flex flex-col items-center justify-center py-16 text-center text-slate-400">
+  <div class="text-5xl mb-4">{{ icon }}</div>
+  <h3 class="text-lg font-semibold text-slate-300 mb-2">{{ heading }}</h3>
+  {% if body %}
+    <p class="text-sm max-w-sm mb-6">{{ body }}</p>
+  {% endif %}
+  {% if cta_label and cta_href %}
+    <a href="{{ cta_href }}"
+       class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">
+      {{ cta_label }}
+    </a>
+  {% endif %}
+</div>
+{% endmacro %}
+

@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from bounty.ui.routes import (
     assets,
+    dashboard,
     findings,
     intel,
     programs,
@@ -20,6 +21,7 @@ from bounty.ui.routes.pages import router as pages_router
 router = APIRouter()
 
 router.include_router(pages_router)
+router.include_router(dashboard.router)
 router.include_router(assets.router)
 router.include_router(findings.router)
 router.include_router(scans.router)

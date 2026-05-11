@@ -1,0 +1,155 @@
+{% extends "_base.html" %}
+{% from "components/status_pill.html" import status_pill %}
+{% from "components/severity_badge.html" import severity_badge %}
+{% from "components/finding_row.html" import finding_row %}
+{% from "components/phase_progress.html" import phase_progress %}
+
+{% block title %}Scan {{ scan.id[:12] }}{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Breadcrumb -->
+  <nav class="text-sm text-slate-400 flex items-center gap-2">
+    <a href="/scans" class="hover:text-white">Scans</a>
+    <span>›</span>
+    <span class="font-mono text-slate-300">{{ scan.id }}</span>
+  </nav>
+
+  <!-- ======================================================= HEADER CARD -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-5 scan-card-{{ scan.status | default('queued') }}">
+    <div class="flex items-start justify-between flex-wrap gap-4">
+      <div class="space-y-2">
+        <div class="flex items-center gap-3">
+          <h1 class="text-xl font-bold text-slate-100 font-mono">{{ scan.id }}</h1>
+          {{ status_pill(scan.status | default('queued')) }}
+        </div>
+        <div class="flex flex-wrap gap-4 text-sm text-slate-400">
+          {% if scan.program_id %}
+            <span>🎯 <a href="/programs/{{ scan.program_id }}" class="text-blue-400 hover:text-blue-300">{{ scan.program_id }}</a></span>
+          {% endif %}
+          <span>🔍 {{ scan.scan_type | default('full') | title }}</span>
+          <span>⚡ {{ scan.intensity | default('normal') | title }}</span>
+          {% if scan.started_at %}
+            <span>▶ Started: {{ scan.started_at | string | truncate(19, True, '') }}</span>
+          {% endif %}
+          {% if scan.finished_at %}
+            <span>■ Finished: {{ scan.finished_at | string | truncate(19, True, '') }}</span>
+          {% endif %}
+        </div>
+        {% if scan.error %}
+          <div class="text-sm text-red-400 mt-1">⚠️ {{ scan.error }}</div>
+        {% endif %}
+      </div>
+
+      <!-- Cancel button -->
+      {% if scan.status in ('running', 'queued') %}
+        <form method="post" action="/api/scans/{{ scan.id }}/cancel" onsubmit="return confirm('Cancel this scan?')">
+          <button type="button"
+                  onclick="cancelScan('{{ scan.id }}')"
+                  class="px-4 py-2 bg-red-700 hover:bg-red-600 text-white text-sm font-medium rounded transition-colors">
+            Cancel Scan
+          </button>
+        </form>
+      {% endif %}
+    </div>
+
+    <!-- Phase progress bar -->
+    {% if scan.phases %}
+      <div class="mt-4">
+        {{ phase_progress(scan.phases) }}
+      </div>
+    {% endif %}
+
+    <!-- Asset / finding counts -->
+    <div class="mt-4 flex gap-6 text-sm text-slate-400">
+      <span>🖥️ <strong class="text-slate-100">{{ scan.asset_count | default(0) }}</strong> assets</span>
+      <span>🐛 <strong class="text-slate-100">{{ scan.finding_count_live | default(0) }}</strong> findings</span>
+    </div>
+  </div>
+
+  <!-- ======================================================= PHASES SECTION -->
+  {% if scan.phases %}
+  <section>
+    <h2 class="text-lg font-semibold text-slate-200 mb-3">Pipeline Phases</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for ph in scan.phases %}
+        <div class="bg-slate-800 border border-slate-700 rounded-lg p-4 scan-card-{{ ph.status | default('pending') }}">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-medium text-sm text-slate-200">{{ ph.name | default(ph.phase | default('Phase')) }}</span>
+            {{ status_pill(ph.status | default('pending')) }}
+          </div>
+          {% if ph.started_at %}
+            <div class="text-xs text-slate-500">Started: {{ ph.started_at | string | truncate(19, True, '') }}</div>
+          {% endif %}
+          {% if ph.finished_at %}
+            <div class="text-xs text-slate-500">Finished: {{ ph.finished_at | string | truncate(19, True, '') }}</div>
+          {% endif %}
+          {% if ph.detail and ph.detail is mapping and ph.detail %}
+            <details class="mt-2">
+              <summary class="text-xs text-slate-400 cursor-pointer hover:text-slate-200">Detail JSON</summary>
+              <pre class="mt-1 text-xs text-slate-400 bg-slate-900 rounded p-2 overflow-auto max-h-40">{{ ph.detail | tojson(indent=2) }}</pre>
+            </details>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- ======================================================= FINDINGS SECTION -->
+  <section>
+    <h2 class="text-lg font-semibold text-slate-200 mb-3">Findings from this Scan</h2>
+    <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+      {% if findings %}
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-xs text-slate-400 uppercase border-b border-slate-700">
+              <th class="px-3 py-2 text-left w-24">Severity</th>
+              <th class="px-3 py-2 text-left">Title</th>
+              <th class="px-3 py-2 text-left">URL</th>
+              <th class="px-3 py-2 text-left">Category</th>
+              <th class="px-3 py-2 text-left">Status</th>
+              <th class="px-3 py-2 text-left">Found</th>
+            </tr>
+          </thead>
+          <tbody id="scan-findings-table">
+            {% for f in findings %}
+              {{ finding_row(f) }}
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if finding_total > findings | length %}
+          <div class="px-4 py-3 border-t border-slate-700 text-sm text-slate-400">
+            Showing {{ findings | length }} of {{ finding_total }} findings.
+            <a href="/findings?scan_id={{ scan.id }}" class="text-blue-400 hover:text-blue-300 ml-1">View all →</a>
+          </div>
+        {% endif %}
+      {% else %}
+        <div class="p-8 text-center text-slate-400 text-sm">No findings for this scan.</div>
+      {% endif %}
+    </div>
+  </section>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function cancelScan(scanId) {
+  if (!confirm('Cancel this scan?')) return;
+  try {
+    const r = await fetch('/api/scans/' + scanId, { method: 'DELETE' });
+    if (r.ok || r.status === 204) {
+      toast('Scan cancelled', 'info');
+      setTimeout(() => window.location.reload(), 1000);
+    } else {
+      toast('Failed to cancel scan', 'error');
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+</script>
+{% endblock %}
+

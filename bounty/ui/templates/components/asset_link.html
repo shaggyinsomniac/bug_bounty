@@ -1,0 +1,15 @@
+{% macro asset_link(asset) %}
+{% set scheme = asset.scheme | default('https') %}
+{% if scheme == 'https' %}{% set icon = '🔒' %}
+{% elif scheme == 'http' %}{% set icon = '🌐' %}
+{% else %}{% set icon = '🔗' %}{% endif %}
+<a href="/assets/{{ asset.id }}"
+   class="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 font-mono text-sm">
+  <span>{{ icon }}</span>
+  <span class="truncate-host" title="{{ asset.host }}">{{ asset.host }}</span>
+  {% if asset.port and asset.port not in (80, 443) %}
+    <span class="text-slate-500">:{{ asset.port }}</span>
+  {% endif %}
+</a>
+{% endmacro %}
+

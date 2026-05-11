@@ -1,0 +1,12 @@
+{% macro phase_progress(phases) %}
+{# phases: list of dicts with .name and .status #}
+<div class="phase-bar" title="Pipeline phases">
+  {% for ph in phases %}
+    {% set s = ph.status | default('pending') %}
+    <div class="phase-bar-step {{ s }}" title="{{ ph.name }}: {{ s }}"></div>
+  {% else %}
+    <div class="phase-bar-step" title="No phases yet"></div>
+  {% endfor %}
+</div>
+{% endmacro %}
+

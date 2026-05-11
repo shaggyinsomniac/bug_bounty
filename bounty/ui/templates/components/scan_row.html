@@ -1,0 +1,31 @@
+{% from "components/status_pill.html" import status_pill %}
+{% macro scan_row(s) %}
+<tr id="scan-row-{{ s.id }}"
+    class="border-b border-slate-700 hover:bg-slate-750 cursor-pointer"
+    onclick="window.location='/scans/{{ s.id }}'">
+  <td class="px-3 py-2 font-mono text-xs text-slate-300">
+    {{ (s.id | string)[:16] }}…
+  </td>
+  <td class="px-3 py-2 text-sm text-slate-300">
+    {{ s.program_id | default('(no program)') }}
+  </td>
+  <td class="px-3 py-2 text-xs text-slate-400">
+    {{ s.scan_type | default('full') }}
+  </td>
+  <td class="px-3 py-2">
+    {{ status_pill(s.status | default('queued')) }}
+  </td>
+  <td class="px-3 py-2 text-xs text-slate-400 uppercase">
+    {{ s.intensity | default('normal') }}
+  </td>
+  <td class="px-3 py-2 text-xs text-slate-500">
+    {{ s.created_at | default('') | string | truncate(16, True, '') }}
+  </td>
+  <td class="px-3 py-2 text-xs text-slate-400 text-right">
+    <a href="/scans/{{ s.id }}"
+       class="text-blue-400 hover:text-blue-300 px-2 py-0.5 rounded hover:bg-slate-700"
+       onclick="event.stopPropagation()">View</a>
+  </td>
+</tr>
+{% endmacro %}
+

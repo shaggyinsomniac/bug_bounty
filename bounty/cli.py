@@ -1586,7 +1586,7 @@ def serve_cmd(
     Visit http://<HOST>:<PORT>/ in your browser.
     Set UI_TOKEN env var to enable authentication in production.
     """
-    import uvicorn  # type: ignore[import]
+    import uvicorn
 
     settings = get_settings()
     db_path = settings.db_path

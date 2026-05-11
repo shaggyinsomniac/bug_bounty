@@ -1,0 +1,15 @@
+{% macro severity_badge(label) %}
+{% set label_lower = label | lower %}
+{% if label_lower == 'critical' %}
+  <span class="severity-critical inline-flex items-center px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wide animate-pulse">{{ label }}</span>
+{% elif label_lower == 'high' %}
+  <span class="severity-high inline-flex items-center px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wide">{{ label }}</span>
+{% elif label_lower == 'medium' %}
+  <span class="severity-medium inline-flex items-center px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wide">{{ label }}</span>
+{% elif label_lower == 'low' %}
+  <span class="severity-low inline-flex items-center px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wide">{{ label }}</span>
+{% else %}
+  <span class="severity-info inline-flex items-center px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wide">{{ label }}</span>
+{% endif %}
+{% endmacro %}
+

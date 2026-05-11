@@ -1,0 +1,224 @@
+{% extends "_base.html" %}
+{% from "components/scan_row.html" import scan_row %}
+{% from "components/status_pill.html" import status_pill %}
+{% from "components/empty_state.html" import empty_state %}
+
+{% block title %}Scans{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Header row -->
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-slate-100">Scans</h1>
+    <!-- New Scan button triggers modal -->
+    <button onclick="document.getElementById('new-scan-modal').showModal()"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors flex items-center gap-2">
+      <span>＋</span> New Scan
+    </button>
+  </div>
+
+  <!-- Filter bar -->
+  <form method="get" action="/scans" class="flex flex-wrap gap-3 items-end bg-slate-800 border border-slate-700 rounded-lg p-4">
+    <div class="flex flex-col gap-1">
+      <label class="text-xs text-slate-400 uppercase">Program</label>
+      <select name="program_id"
+              class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="">All programs</option>
+        {% for p in programs %}
+          <option value="{{ p.id }}" {% if filters.program_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-xs text-slate-400 uppercase">Status</label>
+      <select name="status"
+              class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="">All statuses</option>
+        {% for s in ['queued','running','completed','failed','cancelled'] %}
+          <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s | title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-xs text-slate-400 uppercase">Intensity</label>
+      <select name="intensity"
+              class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="">All</option>
+        {% for i in ['light','normal','aggressive'] %}
+          <option value="{{ i }}" {% if filters.intensity == i %}selected{% endif %}>{{ i | title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit"
+            class="px-4 py-1.5 bg-slate-600 hover:bg-slate-500 text-white text-sm rounded transition-colors">
+      Filter
+    </button>
+    {% if filters.program_id or filters.status or filters.intensity %}
+      <a href="/scans" class="px-4 py-1.5 text-slate-400 hover:text-white text-sm rounded transition-colors">Clear</a>
+    {% endif %}
+  </form>
+
+  <!-- Scan history table -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+    {% if scans %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-400 uppercase border-b border-slate-700 bg-slate-850">
+            <th class="px-3 py-2 text-left">Scan ID</th>
+            <th class="px-3 py-2 text-left">Program</th>
+            <th class="px-3 py-2 text-left">Type</th>
+            <th class="px-3 py-2 text-left">Status</th>
+            <th class="px-3 py-2 text-left">Intensity</th>
+            <th class="px-3 py-2 text-left">Started</th>
+            <th class="px-3 py-2 text-right"></th>
+          </tr>
+        </thead>
+        <tbody id="scan-table">
+          {% for s in scans %}
+            {{ scan_row(s) }}
+          {% endfor %}
+        </tbody>
+      </table>
+      <!-- Pagination -->
+      {% if total > limit %}
+        <div class="flex items-center justify-between px-4 py-3 border-t border-slate-700 text-sm text-slate-400">
+          <span>Showing {{ offset + 1 }}–{{ [offset + limit, total] | min }} of {{ total }}</span>
+          <div class="flex gap-2">
+            {% if offset > 0 %}
+              <a href="/scans?offset={{ [offset - limit, 0] | max }}{% if filters.program_id %}&program_id={{ filters.program_id }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}"
+                 class="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded transition-colors">← Prev</a>
+            {% endif %}
+            {% if offset + limit < total %}
+              <a href="/scans?offset={{ offset + limit }}{% if filters.program_id %}&program_id={{ filters.program_id }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}"
+                 class="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded transition-colors">Next →</a>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+    {% else %}
+      {{ empty_state('🔍', 'No scans yet',
+         'Start a new scan to discover assets and find vulnerabilities.',
+         'New Scan', '#') }}
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- ================================================================ NEW SCAN MODAL -->
+<dialog id="new-scan-modal"
+        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
+  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+    <h2 class="text-lg font-semibold">New Scan</h2>
+    <button onclick="document.getElementById('new-scan-modal').close()"
+            class="text-slate-400 hover:text-white text-xl leading-none">✕</button>
+  </div>
+
+  <form id="new-scan-form" class="px-6 py-4 space-y-4">
+    <!-- Program -->
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200" for="ns-program">Program</label>
+      <select id="ns-program" name="program_id"
+              class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="">— No program —</option>
+        {% for p in programs %}
+          <option value="{{ p.id }}">{{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Scan type -->
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200">Scan Type</label>
+      <div class="flex flex-wrap gap-2">
+        {% for t in ['full','recon','detect','validate'] %}
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+            <input type="radio" name="scan_type" value="{{ t }}" {% if t == 'full' %}checked{% endif %}
+                   class="accent-blue-500">
+            {{ t | title }}
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Intensity -->
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200">Intensity</label>
+      <div class="flex flex-col gap-1">
+        <label class="flex items-start gap-2 text-sm cursor-pointer p-2 rounded hover:bg-slate-700">
+          <input type="radio" name="intensity" value="light" class="mt-0.5 accent-blue-500">
+          <span><strong>Light</strong> <span class="text-slate-400">— passive only, no active probing</span></span>
+        </label>
+        <label class="flex items-start gap-2 text-sm cursor-pointer p-2 rounded hover:bg-slate-700">
+          <input type="radio" name="intensity" value="normal" checked class="mt-0.5 accent-blue-500">
+          <span><strong>Normal</strong> <span class="text-slate-400">— balanced (recommended)</span></span>
+        </label>
+        <label class="flex items-start gap-2 text-sm cursor-pointer p-2 rounded hover:bg-slate-700">
+          <input type="radio" name="intensity" value="aggressive" class="mt-0.5 accent-blue-500">
+          <span><strong>Aggressive</strong> <span class="text-slate-400">— full port scan + deep probing</span></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Target override -->
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200" for="ns-target">
+        Target Override <span class="text-slate-400 font-normal">(optional)</span>
+      </label>
+      <input id="ns-target" type="text" name="target_override" placeholder="e.g. api.example.com"
+             class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+    </div>
+  </form>
+
+  <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
+    <button onclick="document.getElementById('new-scan-modal').close()"
+            class="px-4 py-2 text-sm text-slate-300 hover:text-white rounded transition-colors">
+      Cancel
+    </button>
+    <button id="ns-submit" onclick="submitNewScan()"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors disabled:opacity-50">
+      Start Scan
+    </button>
+  </div>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function submitNewScan() {
+  const form = document.getElementById('new-scan-form');
+  const btn  = document.getElementById('ns-submit');
+  const data = Object.fromEntries(new FormData(form));
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  try {
+    const r = await fetch('/api/scans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        program_id:      data.program_id || null,
+        scan_type:       data.scan_type  || 'full',
+        intensity:       data.intensity  || 'normal',
+        target_override: data.target_override || null,
+      }),
+    });
+    if (r.ok) {
+      const resp = await r.json();
+      document.getElementById('new-scan-modal').close();
+      toast('Scan queued: ' + resp.scan_id, 'success');
+      setTimeout(() => window.location.href = '/scans/' + resp.scan_id, 800);
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Failed to start scan: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = 'Start Scan';
+  }
+}
+</script>
+{% endblock %}
+
