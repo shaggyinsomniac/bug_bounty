@@ -57,35 +57,39 @@ Regex scanner on response bodies. Tokens validated against 30+ providers (AWS, G
 ### Intel (Shodan)
 Shodan host/search queries with file-based caching (TTL: 7 days). Leads stored in `leads`, triaged via API or UI.
 
-### Web UI (Phase 7.2)
+### Web UI (Phase 7.4)
 Dark-mode FastAPI + Jinja2 + HTMX + Alpine.js + Tailwind CSS. No build step — all frontend dependencies loaded via CDN.
 
 **Live pages:**
 - `/` — Dashboard: KPI cards, recent scans, critical findings
 - `/scans` — Paginated scan list with filters and New Scan modal
 - `/scans/{id}` — Scan detail: phases, findings, cancel button
-
-**Placeholder pages (full UI in 7.3+):**
-- `/assets`, `/findings`, `/programs`, `/secrets`, `/reports`, `/settings`
+- `/assets` — Asset list with fingerprint/tech filters; detail page with fingerprint tags
+- `/findings` — Paginated table + kanban view with drag-and-drop status columns
+- `/programs` — Program list/detail with scope rules and finding counts
+- `/secrets` — Validated secrets list (preview only — raw values never shown)
+- `/reports` — Reports module at /reports — H1/Bugcrowd/Markdown templates; New Report modal with program/finding picker
+- `/settings` — Settings at /settings — General, Integrations, Notifications, System tabs
+- Global Cmd-K command palette searches across assets, findings, scans, programs, reports
 
 ---
 
 ## CLI Command Reference
 
-| Command | Description |
-|---|---|
+| Command | Description                          |
+|---|--------------------------------------|
 | `bounty init-db` | Create / migrate the SQLite database |
-| `bounty serve [--host H] [--port P] [--reload]` | Start the web UI server |
-| `bounty smoke-recon --target HOST [--intensity LEVEL]` | Quick single-host recon |
-| `bounty scan run --program PROGRAM_ID [--intensity LEVEL]` | Full pipeline scan |
-| `bounty programs list` | List programs |
-| `bounty programs add --id ID --platform P --handle H --name N` | Add a program |
-| `bounty findings list [--severity LABEL] [--limit N]` | List findings |
-| `bounty findings show FINDING_ID` | Show finding + evidence |
-| `bounty findings count` | Count findings by severity |
-| `bounty findings export [--format json\|csv] [--output FILE]` | Export findings |
-| `bounty secrets list [--status STATUS]` | List secret validations |
-| `bounty intel shodan --query QUERY` | Run Shodan query, store leads |
+| `bounty serve [--host H] [--port P] [--reload]` | Start the web UI server              |
+| `bounty smoke-recon --target HOST [--intensity LEVEL]` | Quick single-host recon              |
+| `bounty scan run --program PROGRAM_ID [--intensity LEVEL]` | Full pipeline scan                   |
+| `bounty programs list` | List programs                        |
+| `bounty programs add --id ID --platform P --handle H --name N` | Add a program                        |
+| `bounty findings list [--severity LABEL] [--limit N]` | List findings                        |
+| `bounty findings show FINDING_ID` | Show finding + evidence              |
+| `bounty findings count` | Count findings by severity           |
+| `bounty findings export [--format json\|csv] [--output FILE]` | Export findings                      |
+| `bounty secrets list [--status STATUS]` | List secr2486et validations          |
+| `bounty intel shodan --query QUERY` | Run Shodan query, store leads        |
 
 ---
 
@@ -229,5 +233,5 @@ Tests use `tmp_path`-isolated SQLite and `httpx.ASGITransport` — no live HTTP.
 | 6 | Done | Admin panel detections (26 checks) |
 | 7.1 | Done | FastAPI backend, API routes, SSE, auth |
 | 7.2 | Done | Web UI shell, dashboard, scans list/detail |
-| 7.3 | Planned | Assets + Findings full pages, evidence viewer |
-| 7.4 | Planned | Programs UI, report builder, light-mode toggle |
+| 7.3 | Done | Assets + Findings full pages, evidence viewer |
+| 7.4 | Done | Programs UI, report builder, command palette, settings |

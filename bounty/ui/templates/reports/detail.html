@@ -1,0 +1,261 @@
+{% extends "_base.html" %}
+{% from "components/finding_row.html" import finding_row %}
+{% from "components/empty_state.html" import empty_state %}
+
+{% block title %}{{ report.title if report.title else 'Report #' + report.id | string }} — Reports{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+
+  <!-- Back + header -->
+  <div class="space-y-2">
+    <a href="/reports" class="text-sm text-slate-400 hover:text-slate-200">← Back to Reports</a>
+    <div class="flex items-center gap-3 flex-wrap">
+      <h1 class="text-2xl font-bold text-slate-100">
+        {{ report.title if report.title else '(untitled)' }}
+      </h1>
+      <span id="status-badge"
+            class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+                   {% if report.status == 'accepted' %}bg-green-900 text-green-300
+                   {% elif report.status == 'sent' %}bg-blue-900 text-blue-300
+                   {% elif report.status == 'rejected' %}bg-red-900 text-red-300
+                   {% else %}bg-slate-700 text-slate-400{% endif %}">
+        {{ report.status | title if report.status else 'Draft' }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Two-column editor + preview -->
+  <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+
+    <!-- Left: editor controls -->
+    <div class="space-y-4">
+      <div class="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-4">
+        <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Editor</h2>
+
+        <div class="flex flex-col gap-1">
+          <label class="text-xs text-slate-400" for="r-title">Title</label>
+          <input id="r-title" type="text" value="{{ report.title if report.title else '' }}"
+                 class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
+                        focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div class="flex gap-3">
+          <div class="flex flex-col gap-1 flex-1">
+            <label class="text-xs text-slate-400" for="r-status">Status</label>
+            <select id="r-status"
+                    class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-blue-500">
+              {% for s in ['draft', 'sent', 'accepted', 'rejected'] %}
+                <option value="{{ s }}" {% if report.status == s %}selected{% endif %}>{{ s | title }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="flex flex-col gap-1 flex-1">
+            <label class="text-xs text-slate-400" for="r-template">Template</label>
+            <select id="r-template"
+                    class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-blue-500">
+              {% for t in ['h1', 'bugcrowd', 'markdown'] %}
+                <option value="{{ t }}" {% if report.template == t %}selected{% endif %}>{{ t | upper }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label class="text-xs text-slate-400" for="r-body">Body (Markdown)</label>
+          <textarea id="r-body" rows="20"
+                    oninput="renderPreviewDebounced()"
+                    class="bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm font-mono
+                           focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y">{{ report.body if report.body else '' }}</textarea>
+        </div>
+
+        <div class="flex gap-2 flex-wrap">
+          <button onclick="saveReport({{ report.id }})"
+                  class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">
+            Save
+          </button>
+          <button onclick="regenerateReport({{ report.id }})"
+                  class="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white text-sm rounded transition-colors">
+            Regenerate
+          </button>
+          <button onclick="submitReport({{ report.id }})"
+                  class="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm rounded transition-colors">
+            Submit
+          </button>
+          <button onclick="deleteReport({{ report.id }})"
+                  class="px-4 py-2 bg-red-900 hover:bg-red-800 text-red-300 text-sm rounded transition-colors ml-auto">
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: markdown preview -->
+    <div class="lg:sticky lg:top-4 self-start">
+      <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+        <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-3">Preview</h2>
+        <div id="md-preview"
+             class="prose prose-invert prose-sm max-w-none text-slate-300 overflow-auto max-h-[70vh]">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Linked findings -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-slate-700">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">
+        Linked Findings
+        <span class="ml-2 text-xs font-normal text-slate-500">({{ findings | length }})</span>
+      </h2>
+    </div>
+    {% if findings %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-400 uppercase border-b border-slate-700">
+            <th class="px-3 py-2 text-left w-24">Severity</th>
+            <th class="px-3 py-2 text-left w-28">Status</th>
+            <th class="px-3 py-2 text-left">Title</th>
+            <th class="px-3 py-2 text-left">Asset Host</th>
+            <th class="px-3 py-2 text-left">Category</th>
+            <th class="px-3 py-2 text-center w-20">Valid</th>
+            <th class="px-3 py-2 text-left w-36">Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in findings %}
+            {{ finding_row(f) }}
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      {{ empty_state('🐛', 'No findings linked', 'Edit the report to add findings.', '', '') }}
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// render preview immediately on load
+document.addEventListener('DOMContentLoaded', () => {
+  renderPreview();
+});
+
+let _previewTimer = null;
+function renderPreviewDebounced() {
+  clearTimeout(_previewTimer);
+  _previewTimer = setTimeout(renderPreview, 400);
+}
+
+function renderPreview() {
+  const body = document.getElementById('r-body').value;
+  const el = document.getElementById('md-preview');
+  if (typeof marked !== 'undefined' && el) {
+    el.innerHTML = marked.parse(body || '');
+  }
+}
+
+async function saveReport(id) {
+  const body = {
+    title: document.getElementById('r-title').value,
+    status: document.getElementById('r-status').value,
+    template: document.getElementById('r-template').value,
+    body: document.getElementById('r-body').value,
+  };
+  try {
+    const r = await fetch('/api/reports/' + id, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) {
+      toast('Report saved', 'success');
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Save failed: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  }
+}
+
+async function regenerateReport(id) {
+  if (!confirm('Regenerate report body from findings? This will overwrite your edits.')) return;
+  try {
+    const r = await fetch('/api/reports/' + id + '/generate', { method: 'POST' });
+    if (r.ok) {
+      const data = await r.json();
+      document.getElementById('r-body').value = data.body || '';
+      renderPreview();
+      toast('Report regenerated', 'success');
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Regenerate failed: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  }
+}
+
+async function submitReport(id) {
+  if (!confirm('Mark this report as submitted/sent?')) return;
+  try {
+    const r = await fetch('/api/reports/' + id, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'sent' }),
+    });
+    if (r.ok) {
+      toast('Report submitted', 'success');
+      window.location.reload();
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Failed: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  }
+}
+
+async function deleteReport(id) {
+  if (!confirm('Delete this report? This cannot be undone.')) return;
+  try {
+    const r = await fetch('/api/reports/' + id, { method: 'DELETE' });
+    if (r.ok) {
+      toast('Report deleted', 'success');
+      setTimeout(() => window.location.href = '/reports', 600);
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Delete failed: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  }
+}
+</script>
+<style>
+.prose h1, .prose h2, .prose h3 { color: #e2e8f0; margin-top: 1rem; margin-bottom: 0.5rem; }
+.prose h1 { font-size: 1.5rem; font-weight: 700; }
+.prose h2 { font-size: 1.25rem; font-weight: 600; }
+.prose h3 { font-size: 1.1rem; font-weight: 600; }
+.prose p { margin-bottom: 0.75rem; }
+.prose ul, .prose ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+.prose li { margin-bottom: 0.25rem; }
+.prose code { background: #1e293b; padding: 1px 4px; border-radius: 3px; font-size: 0.85em; }
+.prose pre { background: #0f172a; padding: 1rem; border-radius: 6px; overflow-x: auto; margin-bottom: 1rem; }
+.prose pre code { background: none; padding: 0; }
+.prose table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+.prose th, .prose td { padding: 6px 12px; border: 1px solid #334155; text-align: left; }
+.prose th { background: #1e293b; }
+.prose hr { border-color: #334155; margin: 1.5rem 0; }
+</style>
+{% endblock %}
+

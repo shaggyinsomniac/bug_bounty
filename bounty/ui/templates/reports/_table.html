@@ -1,0 +1,80 @@
+{% from "components/empty_state.html" import empty_state %}
+
+{% if reports %}
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-xs text-slate-400 uppercase border-b border-slate-700 bg-slate-850">
+        <th class="px-3 py-2 text-left w-16">ID</th>
+        <th class="px-3 py-2 text-left">Title</th>
+        <th class="px-3 py-2 text-left w-28">Template</th>
+        <th class="px-3 py-2 text-left w-24">Status</th>
+        <th class="px-3 py-2 text-right w-16">Findings</th>
+        <th class="px-3 py-2 text-left w-36">Created</th>
+        <th class="px-3 py-2 text-left w-36">Sent</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in reports %}
+        <tr id="report-{{ r.id }}"
+            class="border-b border-slate-700 hover:bg-slate-750 cursor-pointer"
+            onclick="window.location='/reports/{{ r.id }}'">
+          <td class="px-3 py-2 text-xs text-slate-400 font-mono">#{{ r.id }}</td>
+          <td class="px-3 py-2 text-sm font-medium text-slate-200 max-w-xs">
+            <a href="/reports/{{ r.id }}" class="hover:underline" onclick="event.stopPropagation()">
+              <div class="truncate">{{ r.title if r.title else '(untitled)' }}</div>
+            </a>
+          </td>
+          <td class="px-3 py-2">
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                   {% if r.template == 'h1' %}bg-red-900 text-red-300
+                   {% elif r.template == 'bugcrowd' %}bg-orange-900 text-orange-300
+                   {% else %}bg-slate-700 text-slate-300{% endif %}">
+              {{ r.template | upper if r.template else 'MD' }}
+            </span>
+          </td>
+          <td class="px-3 py-2">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+                   {% if r.status == 'accepted' %}bg-green-900 text-green-300
+                   {% elif r.status == 'sent' %}bg-blue-900 text-blue-300
+                   {% elif r.status == 'rejected' %}bg-red-900 text-red-300
+                   {% else %}bg-slate-700 text-slate-400{% endif %}">
+              {{ r.status | title if r.status else 'Draft' }}
+            </span>
+          </td>
+          <td class="px-3 py-2 text-xs text-slate-400 text-right">
+            {{ (r.finding_ids | length) if r.finding_ids else 0 }}
+          </td>
+          <td class="px-3 py-2 text-xs text-slate-500">
+            {{ (r.created_at if r.created_at else '') | string | truncate(16, True, '') }}
+          </td>
+          <td class="px-3 py-2 text-xs text-slate-500">
+            {{ (r.sent_at if r.sent_at else '—') | string | truncate(16, True, '') }}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if total > per_page %}
+    <div class="flex items-center justify-between px-4 py-3 border-t border-slate-700 text-sm text-slate-400">
+      <span>Showing {{ (page - 1) * per_page + 1 }}–{{ [page * per_page, total] | min }} of {{ total }}</span>
+      <div class="flex gap-2">
+        {% if page > 1 %}
+          <a href="/reports?page={{ page - 1 }}{% if filters.program_id %}&program_id={{ filters.program_id }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.template %}&template={{ filters.template }}{% endif %}"
+             hx-get="/reports?page={{ page - 1 }}" hx-target="#reports-table" hx-push-url="true"
+             class="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded transition-colors">← Prev</a>
+        {% endif %}
+        {% if page * per_page < total %}
+          <a href="/reports?page={{ page + 1 }}{% if filters.program_id %}&program_id={{ filters.program_id }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.template %}&template={{ filters.template }}{% endif %}"
+             hx-get="/reports?page={{ page + 1 }}" hx-target="#reports-table" hx-push-url="true"
+             class="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded transition-colors">Next →</a>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+{% else %}
+  {{ empty_state('📄', 'No reports yet',
+     'Create a new report to export your findings to HackerOne, Bugcrowd, or Markdown.',
+     '', '') }}
+{% endif %}
+

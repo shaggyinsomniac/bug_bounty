@@ -801,6 +801,55 @@ ALTER TABLE secrets_validations_v7 RENAME TO secrets_validations;
 COMMIT;
 """
 
+_MIGRATION_V8 = """
+BEGIN TRANSACTION;
+
+-- Recreate reports with new multi-finding schema.
+-- Old schema: finding_id (single TEXT), platform, status (draft/submitted/accepted/closed)
+-- New schema: program_id, finding_ids (JSON array), template, status (draft/sent/accepted/rejected),
+--             platform_submission_id, sent_at
+CREATE TABLE reports_v8 (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id              TEXT REFERENCES programs(id) ON DELETE SET NULL,
+    finding_ids             TEXT NOT NULL DEFAULT '[]',
+    title                   TEXT NOT NULL DEFAULT '',
+    template                TEXT NOT NULL DEFAULT 'markdown',
+    body                    TEXT NOT NULL DEFAULT '',
+    status                  TEXT NOT NULL DEFAULT 'draft',
+    platform_submission_id  TEXT,
+    sent_at                 TEXT,
+    created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+INSERT INTO reports_v8 (id, finding_ids, title, template, body, status, sent_at, created_at, updated_at)
+    SELECT
+        id,
+        '["' || finding_id || '"]',
+        COALESCE(title, ''),
+        CASE platform
+            WHEN 'h1' THEN 'h1'
+            WHEN 'bugcrowd' THEN 'bugcrowd'
+            ELSE 'markdown'
+        END,
+        COALESCE(body, ''),
+        CASE status
+            WHEN 'submitted' THEN 'sent'
+            WHEN 'accepted' THEN 'accepted'
+            WHEN 'closed' THEN 'rejected'
+            ELSE 'draft'
+        END,
+        submitted_at,
+        created_at,
+        updated_at
+    FROM reports;
+
+DROP TABLE reports;
+ALTER TABLE reports_v8 RENAME TO reports;
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
     _MIGRATION_V1,
     # v2 → add leads table for intel / Shodan triage.
@@ -818,6 +867,9 @@ _MIGRATIONS: list[str] = [
     _MIGRATION_V6,
     # v7 → convert secrets_validations.id from INTEGER to TEXT (ULID).
     _MIGRATION_V7,
+    # v8 → restructure reports: multi-finding (finding_ids JSON array), program_id,
+    #       template field (h1/bugcrowd/markdown), status normalised to draft/sent/accepted/rejected.
+    _MIGRATION_V8,
 ]
 
 
@@ -842,7 +894,13 @@ def init_db(db_path: Path) -> None:
         for stmt in _SCHEMA:
             stmt = stmt.strip()
             if stmt:
-                conn.execute(stmt)
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError:
+                    # Index/column may not exist yet (if schema references a column
+                    # that was added/removed in a later migration).  Safe to skip —
+                    # the migration will create the correct version.
+                    pass
 
         conn.commit()
         log.info("database_initialised", path=str(db_path))
@@ -918,7 +976,8 @@ def _recreate_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_evidence_finding ON evidence_packages(finding_id)",
         "CREATE INDEX IF NOT EXISTS idx_secrets_status ON secrets_validations(status)",
         "CREATE INDEX IF NOT EXISTS idx_secrets_provider ON secrets_validations(provider)",
-        "CREATE INDEX IF NOT EXISTS idx_reports_finding ON reports(finding_id)",
+        "CREATE INDEX IF NOT EXISTS idx_reports_program ON reports(program_id)",
+        "CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status)",
         "CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)",
         "CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit_log(operation)",
         "CREATE INDEX IF NOT EXISTS idx_targets_program ON targets(program_id)",
@@ -926,7 +985,13 @@ def _recreate_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_leads_program ON leads(program_id)",
     ]
     for stmt in index_stmts:
-        conn.execute(stmt)
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            # Index references a column that doesn't exist yet in this migration
+            # step (e.g. program_id added in a later migration). Safe to skip —
+            # the index will be created once the column-adding migration runs.
+            pass
     conn.commit()
 
 

@@ -41,7 +41,7 @@
       🎯 <span class="hidden sm:inline">Bounty</span>
     </a>
 
-    <!-- Search -->
+    <!-- Search (opens palette) -->
     <div class="flex-1 max-w-sm">
       <input
         id="search-input"
@@ -49,7 +49,10 @@
         placeholder="Search… (/ or ⌘K)"
         class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-1 text-sm
                focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
-               placeholder-slate-400"
+               placeholder-slate-400 cursor-pointer"
+        readonly
+        onclick="openPalette()"
+        onkeydown="if(event.key!=='Tab')openPalette()"
       >
     </div>
 
@@ -123,6 +126,28 @@
   <!-- ================================================================ TOAST CONTAINER -->
   <div id="toast-container"
        class="fixed bottom-8 right-4 flex flex-col gap-2 z-50 min-w-64 max-w-sm">
+  </div>
+
+  <!-- ================================================================ COMMAND PALETTE -->
+  <div id="palette-overlay"
+       class="fixed inset-0 bg-black/60 z-[100] hidden flex items-start justify-center pt-24"
+       onclick="if(event.target===this)closePalette()">
+    <div class="bg-slate-800 border border-slate-600 rounded-xl shadow-2xl w-full max-w-xl mx-4">
+      <!-- Search input -->
+      <div class="flex items-center gap-3 px-4 py-3 border-b border-slate-700">
+        <span class="text-slate-400 text-lg">🔍</span>
+        <input id="palette-input" type="search" autocomplete="off"
+               placeholder="Search assets, findings, scans, programs, reports…"
+               class="flex-1 bg-transparent text-slate-100 placeholder-slate-500 outline-none text-sm"
+               oninput="debouncePaletteSearch(this.value)"
+               onkeydown="handlePaletteKey(event)">
+        <kbd class="text-xs text-slate-500 bg-slate-700 px-1.5 py-0.5 rounded">Esc</kbd>
+      </div>
+      <!-- Results -->
+      <div id="palette-results" class="max-h-80 overflow-y-auto py-2">
+        <ul id="palette-list" class="flex flex-col"></ul>
+      </div>
+    </div>
   </div>
 
   <!-- ================================================================ SCRIPTS -->

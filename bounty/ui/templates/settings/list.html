@@ -1,13 +1,305 @@
 {% extends "_base.html" %}
+
 {% block title %}Settings{% endblock %}
+
 {% block content %}
-<div class="space-y-4">
+<div class="space-y-6" x-data="{ tab: 'general' }">
+
   <h1 class="text-2xl font-bold text-slate-100">Settings</h1>
-  <div class="bg-slate-800 border border-slate-700 rounded-lg p-8 text-center text-slate-400">
-    <div class="text-4xl mb-3">⚙️</div>
-    <h2 class="text-lg font-semibold text-slate-300 mb-2">Coming in next phase</h2>
-    <p class="text-sm">Application configuration, notification settings, API key management, and theme preferences.</p>
+
+  <!-- Tab bar -->
+  <div class="flex gap-1 bg-slate-800 border border-slate-700 rounded-lg p-1 w-fit">
+    {% for tid, tlabel in [('general', 'General'), ('integrations', 'Integrations'), ('notifications', 'Notifications'), ('system', 'System')] %}
+      <button @click="tab = '{{ tid }}'"
+              :class="tab === '{{ tid }}' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'"
+              class="px-4 py-1.5 rounded text-sm font-medium transition-colors">
+        {{ tlabel }}
+      </button>
+    {% endfor %}
   </div>
+
+  <!-- Tab: General -->
+  <div x-show="tab === 'general'" class="space-y-4">
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-6">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">General</h2>
+
+      <div class="flex items-center justify-between py-2 border-b border-slate-700">
+        <div>
+          <div class="text-sm font-medium text-slate-200">UI Token</div>
+          <div class="text-xs text-slate-400">Protects the web interface and API</div>
+        </div>
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                     {% if ui_token_configured %}bg-green-900 text-green-300{% else %}bg-slate-700 text-slate-400{% endif %}">
+          {% if ui_token_configured %}✓ Configured{% else %}✗ Not set (open access){% endif %}
+        </span>
+      </div>
+
+      <div class="flex items-center justify-between py-2 border-b border-slate-700">
+        <div>
+          <div class="text-sm font-medium text-slate-200">Dark Mode</div>
+          <div class="text-xs text-slate-400">Persisted in localStorage</div>
+        </div>
+        <button onclick="toggleTheme()"
+                class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm rounded transition-colors">
+          Toggle Theme
+        </button>
+      </div>
+
+      <div class="flex items-center justify-between py-2">
+        <div>
+          <div class="text-sm font-medium text-slate-200">Default Scan Intensity</div>
+          <div class="text-xs text-slate-400">Used when creating new scans</div>
+        </div>
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-700 text-slate-300">
+          {{ default_intensity | title }}
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Integrations -->
+  <div x-show="tab === 'integrations'" class="space-y-4">
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-6">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Integrations</h2>
+
+      <!-- Shodan -->
+      <div class="flex items-center justify-between py-2 border-b border-slate-700">
+        <div>
+          <div class="text-sm font-medium text-slate-200">Shodan API Key</div>
+          <div class="text-xs text-slate-400">Required for intel / attack surface discovery</div>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                       {% if shodan_configured %}bg-green-900 text-green-300{% else %}bg-red-900 text-red-300{% endif %}">
+            {% if shodan_configured %}✓ Configured{% else %}✗ Not set{% endif %}
+          </span>
+          <button onclick="document.getElementById('shodan-modal').showModal()"
+                  class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-slate-200 text-sm rounded transition-colors">
+            Set Key
+          </button>
+        </div>
+      </div>
+
+      <!-- Discord Webhook: Findings -->
+      <div class="flex items-center justify-between py-2 border-b border-slate-700">
+        <div>
+          <div class="text-sm font-medium text-slate-200">Discord Webhook — Findings</div>
+          <div class="text-xs text-slate-500 font-mono truncate max-w-xs">
+            {{ discord_webhook_findings if discord_webhook_findings else '(not configured)' }}
+          </div>
+        </div>
+        <button onclick="document.getElementById('discord-findings-modal').showModal()"
+                class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-slate-200 text-sm rounded transition-colors">
+          Configure
+        </button>
+      </div>
+
+      <!-- Discord Webhook: Secrets -->
+      <div class="flex items-center justify-between py-2">
+        <div>
+          <div class="text-sm font-medium text-slate-200">Discord Webhook — Live Secrets</div>
+          <div class="text-xs text-slate-500 font-mono truncate max-w-xs">
+            {{ discord_webhook_secrets if discord_webhook_secrets else '(not configured)' }}
+          </div>
+        </div>
+        <button onclick="document.getElementById('discord-secrets-modal').showModal()"
+                class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-slate-200 text-sm rounded transition-colors">
+          Configure
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Notifications -->
+  <div x-show="tab === 'notifications'" class="space-y-4">
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-4">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Notifications</h2>
+      <p class="text-sm text-slate-400">Configure notification thresholds and schedules.</p>
+
+      <div class="flex items-center justify-between py-2 border-b border-slate-700">
+        <div>
+          <div class="text-sm font-medium text-slate-200">Discord severity threshold</div>
+          <div class="text-xs text-slate-400">Notify on findings at or above this severity</div>
+        </div>
+        <select id="notif-threshold"
+                class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          {% for s in ['critical', 'high', 'medium', 'low', 'info'] %}
+            <option value="{{ s }}">{{ s | title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="flex items-center justify-between py-2">
+        <div>
+          <div class="text-sm font-medium text-slate-200">Quiet hours</div>
+          <div class="text-xs text-slate-400">Suppress notifications during these hours (local time)</div>
+        </div>
+        <div class="flex items-center gap-2 text-sm text-slate-300">
+          <input type="time" value="22:00"
+                 class="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm focus:outline-none">
+          <span>–</span>
+          <input type="time" value="08:00"
+                 class="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm focus:outline-none">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: System -->
+  <div x-show="tab === 'system'" class="space-y-4">
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-4">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">System</h2>
+
+      <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 text-sm">
+        <div>
+          <dt class="text-xs text-slate-500 uppercase">DB Path</dt>
+          <dd class="text-slate-200 font-mono mt-0.5 text-xs break-all">{{ db_path }}</dd>
+        </div>
+        <div>
+          <dt class="text-xs text-slate-500 uppercase">DB Size</dt>
+          <dd class="text-slate-200 mt-0.5">{{ (db_size_bytes / 1024) | round(1) }} KB</dd>
+        </div>
+        <div>
+          <dt class="text-xs text-slate-500 uppercase">Evidence Dir Size</dt>
+          <dd class="text-slate-200 mt-0.5">{{ (ev_size_bytes / 1024) | round(1) }} KB</dd>
+        </div>
+        <div>
+          <dt class="text-xs text-slate-500 uppercase">Version info</dt>
+          <dd class="text-slate-200 mt-0.5">
+            <span id="sys-version" class="text-xs text-slate-400">Loading…</span>
+          </dd>
+        </div>
+      </dl>
+
+      <div class="flex flex-wrap gap-3 pt-2 border-t border-slate-700">
+        <button onclick="vacuumDb()"
+                class="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white text-sm rounded transition-colors">
+          Compact DB (VACUUM)
+        </button>
+        <button onclick="wipeTestData()"
+                class="px-4 py-2 bg-red-900 hover:bg-red-800 text-red-300 text-sm rounded transition-colors">
+          Clean Test Data
+        </button>
+      </div>
+    </div>
+  </div>
+
 </div>
+
+<!-- Shodan modal -->
+<dialog id="shodan-modal"
+        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
+  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+    <h2 class="text-lg font-semibold">Set Shodan API Key</h2>
+    <button onclick="document.getElementById('shodan-modal').close()" class="text-slate-400 hover:text-white text-xl">✕</button>
+  </div>
+  <div class="px-6 py-4 space-y-4">
+    <input id="shodan-key" type="password" placeholder="Shodan API key"
+           class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+  </div>
+  <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
+    <button onclick="document.getElementById('shodan-modal').close()" class="px-4 py-2 text-sm text-slate-300 hover:text-white rounded">Cancel</button>
+    <button onclick="saveApiKey('SHODAN_API_KEY', 'shodan-key', 'shodan-modal')"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded">Save</button>
+  </div>
+</dialog>
+
+<!-- Discord findings webhook modal -->
+<dialog id="discord-findings-modal"
+        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
+  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+    <h2 class="text-lg font-semibold">Discord Webhook — Findings</h2>
+    <button onclick="document.getElementById('discord-findings-modal').close()" class="text-slate-400 hover:text-white text-xl">✕</button>
+  </div>
+  <div class="px-6 py-4">
+    <input id="discord-findings-key" type="text" placeholder="https://discord.com/api/webhooks/..."
+           value="{{ discord_webhook_findings }}"
+           class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+  </div>
+  <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
+    <button onclick="document.getElementById('discord-findings-modal').close()" class="px-4 py-2 text-sm text-slate-300 rounded">Cancel</button>
+    <button onclick="saveApiKey('DISCORD_WEBHOOK_FINDINGS', 'discord-findings-key', 'discord-findings-modal')"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded">Save</button>
+  </div>
+</dialog>
+
+<!-- Discord secrets webhook modal -->
+<dialog id="discord-secrets-modal"
+        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
+  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+    <h2 class="text-lg font-semibold">Discord Webhook — Live Secrets</h2>
+    <button onclick="document.getElementById('discord-secrets-modal').close()" class="text-slate-400 hover:text-white text-xl">✕</button>
+  </div>
+  <div class="px-6 py-4">
+    <input id="discord-secrets-key" type="text" placeholder="https://discord.com/api/webhooks/..."
+           value="{{ discord_webhook_secrets }}"
+           class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+  </div>
+  <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
+    <button onclick="document.getElementById('discord-secrets-modal').close()" class="px-4 py-2 text-sm text-slate-300 rounded">Cancel</button>
+    <button onclick="saveApiKey('DISCORD_WEBHOOK_SECRETS', 'discord-secrets-key', 'discord-secrets-modal')"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded">Save</button>
+  </div>
+</dialog>
+
 {% endblock %}
 
+{% block scripts %}
+<script>
+// Load system info
+fetch('/api/system/info')
+  .then(r => r.json())
+  .then(d => {
+    const el = document.getElementById('sys-version');
+    if (el) {
+      el.textContent = `bounty ${d.bounty_version} · FastAPI ${d.fastapi_version} · Python ${(d.python_version || '').split(' ')[0]}`;
+    }
+  }).catch(() => {});
+
+async function saveApiKey(key, inputId, modalId) {
+  const val = document.getElementById(inputId).value.trim();
+  if (!val) { toast('Value cannot be empty', 'error'); return; }
+  try {
+    const r = await fetch('/api/system/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value: val }),
+    });
+    if (r.ok) {
+      document.getElementById(modalId).close();
+      toast('Setting saved (restart required)', 'success');
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Failed: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) { toast('Network error', 'error'); }
+}
+
+async function vacuumDb() {
+  if (!confirm('Run VACUUM on the database? This may take a moment.')) return;
+  try {
+    const r = await fetch('/api/system/vacuum', { method: 'POST' });
+    if (r.ok) toast('VACUUM completed', 'success');
+    else toast('VACUUM failed', 'error');
+  } catch (e) { toast('Network error', 'error'); }
+}
+
+async function wipeTestData() {
+  if (!confirm('This will delete rows matching "test" or "dummy" patterns. Continue?')) return;
+  try {
+    const r = await fetch('/api/system/wipe-test-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      toast('Cleaned: ' + JSON.stringify(d.deleted), 'success');
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Failed: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) { toast('Network error', 'error'); }
+}
+</script>
+{% endblock %}

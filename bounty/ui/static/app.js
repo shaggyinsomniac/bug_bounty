@@ -133,10 +133,13 @@ function toast(message, kind) {
   }
 }
 
-// Dismiss all on Escape
+// Dismiss all toasts on Escape (when palette is not open)
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    document.querySelectorAll('#toast-container > div').forEach(el => el.remove());
+    const overlay = document.getElementById('palette-overlay');
+    if (!overlay || overlay.classList.contains('hidden')) {
+      document.querySelectorAll('#toast-container > div').forEach(el => el.remove());
+    }
   }
 });
 
@@ -173,25 +176,27 @@ function htmxAuth() {
   };
 
   document.addEventListener('keydown', (e) => {
-    // Ignore when typing in inputs
+    // Ignore when typing in inputs (except palette input handled separately)
     const tag = document.activeElement && document.activeElement.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const isPaletteInput = document.activeElement && document.activeElement.id === 'palette-input';
+    if (!isPaletteInput && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')) return;
 
     // Cmd/Ctrl+K → command palette
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
       e.preventDefault();
-      const input = document.getElementById('search-input');
-      if (input) input.focus();
+      openPalette();
       return;
     }
 
+    if (isPaletteInput) return; // let palette key handler deal with it
+
     if (e.key === '/') {
       e.preventDefault();
-      const input = document.getElementById('search-input');
-      if (input) input.focus();
+      openPalette();
       return;
     }
+
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     buf += e.key;
     clearTimeout(timer);
@@ -203,6 +208,186 @@ function htmxAuth() {
     }
   });
 })();
+
+/* ------------------------------------------------------------------ command palette */
+let _paletteDebounceTimer = null;
+let _paletteSelectedIdx = -1;
+
+function openPalette() {
+  const overlay = document.getElementById('palette-overlay');
+  const input = document.getElementById('palette-input');
+  if (!overlay) return;
+  overlay.classList.remove('hidden');
+  overlay.classList.add('flex');
+  if (input) {
+    input.value = '';
+    input.focus();
+    _paletteSelectedIdx = -1;
+    _fetchPaletteResults('');
+  }
+}
+
+function closePalette() {
+  const overlay = document.getElementById('palette-overlay');
+  if (!overlay) return;
+  overlay.classList.add('hidden');
+  overlay.classList.remove('flex');
+  _paletteSelectedIdx = -1;
+  // Return focus to search trigger
+  const si = document.getElementById('search-input');
+  if (si) si.blur();
+}
+
+function debouncePaletteSearch(q) {
+  clearTimeout(_paletteDebounceTimer);
+  _paletteDebounceTimer = setTimeout(() => _fetchPaletteResults(q), 200);
+}
+
+async function _fetchPaletteResults(q) {
+  try {
+    const r = await fetch('/api/palette/search?q=' + encodeURIComponent(q));
+    if (!r.ok) return;
+    const data = await r.json();
+    _renderPaletteResults(data, q);
+  } catch (_) {}
+}
+
+function _renderPaletteResults(data, q) {
+  const list = document.getElementById('palette-list');
+  if (!list) return;
+  list.innerHTML = '';
+  _paletteSelectedIdx = -1;
+
+  const badgeColours = {
+    asset:   'bg-blue-900 text-blue-300',
+    finding: 'bg-red-900 text-red-300',
+    program: 'bg-green-900 text-green-300',
+    scan:    'bg-purple-900 text-purple-300',
+    report:  'bg-yellow-900 text-yellow-300',
+    action:  'bg-slate-700 text-slate-300',
+  };
+
+  function makeItem(item, isAction) {
+    const li = document.createElement('li');
+    const typeKey = isAction ? 'action' : (item.type || 'action');
+    const badge = item.badge || item.type || '';
+    li.className = 'palette-item flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-slate-700 transition-colors text-sm';
+    li.dataset.url = item.url || '#';
+    li.innerHTML = `
+      <span class="text-base">${item.icon || '→'}</span>
+      <span class="flex-1 text-slate-100 truncate">${item.label}</span>
+      ${badge ? `<span class="text-xs px-1.5 py-0.5 rounded ${badgeColours[typeKey] || badgeColours.action}">${badge}</span>` : ''}
+    `;
+    li.addEventListener('click', () => {
+      closePalette();
+      window.location.href = li.dataset.url;
+    });
+    li.addEventListener('mouseenter', () => {
+      _paletteSetSelected(Array.from(list.children).indexOf(li));
+    });
+    return li;
+  }
+
+  // Quick actions (always shown at top when no query, or when short query)
+  if (!q.trim() && data.quick_actions) {
+    const hdr = document.createElement('li');
+    hdr.className = 'px-4 py-1 text-xs uppercase tracking-wider text-slate-500';
+    hdr.textContent = 'Quick Actions';
+    list.appendChild(hdr);
+    for (const qa of data.quick_actions) {
+      list.appendChild(makeItem(qa, true));
+    }
+  }
+
+  // Search results
+  if (data.results && data.results.length > 0) {
+    if (!q.trim() || true) {
+      const hdr = document.createElement('li');
+      hdr.className = 'px-4 py-1 text-xs uppercase tracking-wider text-slate-500';
+      hdr.textContent = q.trim() ? 'Results' : 'Recent';
+      list.appendChild(hdr);
+    }
+    for (const item of data.results) {
+      list.appendChild(makeItem(item, false));
+    }
+  } else if (q.trim() && (!data.results || data.results.length === 0)) {
+    // Show quick actions as fallback
+    if (data.quick_actions && data.quick_actions.length > 0) {
+      const hdr = document.createElement('li');
+      hdr.className = 'px-4 py-1 text-xs text-slate-500';
+      hdr.textContent = 'No results — quick actions:';
+      list.appendChild(hdr);
+      for (const qa of data.quick_actions) {
+        list.appendChild(makeItem(qa, true));
+      }
+    } else {
+      const li = document.createElement('li');
+      li.className = 'px-4 py-3 text-sm text-slate-500 text-center';
+      li.textContent = 'No results found';
+      list.appendChild(li);
+    }
+  }
+}
+
+function _paletteSetSelected(idx) {
+  const list = document.getElementById('palette-list');
+  if (!list) return;
+  const items = list.querySelectorAll('.palette-item');
+  items.forEach((el, i) => {
+    if (i === idx) {
+      el.classList.add('bg-slate-700');
+    } else {
+      el.classList.remove('bg-slate-700');
+    }
+  });
+  _paletteSelectedIdx = idx;
+}
+
+function handlePaletteKey(e) {
+  const list = document.getElementById('palette-list');
+  if (!list) return;
+  const items = Array.from(list.querySelectorAll('.palette-item'));
+
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closePalette();
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    const next = Math.min(_paletteSelectedIdx + 1, items.length - 1);
+    _paletteSetSelected(next);
+    if (items[next]) items[next].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    const prev = Math.max(_paletteSelectedIdx - 1, 0);
+    _paletteSetSelected(prev);
+    if (items[prev]) items[prev].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_paletteSelectedIdx >= 0 && items[_paletteSelectedIdx]) {
+      const url = items[_paletteSelectedIdx].dataset.url;
+      if (url && url !== '#') {
+        closePalette();
+        window.location.href = url;
+      }
+    } else if (items.length > 0) {
+      const url = items[0].dataset.url;
+      if (url && url !== '#') {
+        closePalette();
+        window.location.href = url;
+      }
+    }
+  }
+}
+
+// Close palette on Escape (global handler complement)
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const overlay = document.getElementById('palette-overlay');
+    if (overlay && !overlay.classList.contains('hidden')) {
+      closePalette();
+    }
+  }
+});
 
 /* ------------------------------------------------------------------ clipboard */
 /**

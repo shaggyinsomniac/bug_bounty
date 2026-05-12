@@ -1,13 +1,207 @@
 {% extends "_base.html" %}
+{% from "components/empty_state.html" import empty_state %}
+
 {% block title %}Reports{% endblock %}
+
 {% block content %}
-<div class="space-y-4">
-  <h1 class="text-2xl font-bold text-slate-100">Reports</h1>
-  <div class="bg-slate-800 border border-slate-700 rounded-lg p-8 text-center text-slate-400">
-    <div class="text-4xl mb-3">📄</div>
-    <h2 class="text-lg font-semibold text-slate-300 mb-2">Coming in next phase</h2>
-    <p class="text-sm">Report builder with HackerOne, Bugcrowd, and Intigriti platform export.</p>
+<div class="space-y-6">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <h1 class="text-2xl font-bold text-slate-100">Reports</h1>
+      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-700 text-slate-300">
+        {{ total }}
+      </span>
+    </div>
+    <button onclick="document.getElementById('new-report-modal').showModal()"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors flex items-center gap-2">
+      <span>＋</span> New Report
+    </button>
   </div>
+
+  <!-- Filter bar -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+    <div class="flex flex-wrap gap-4 items-end">
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide" for="program-filter">Program</label>
+        <select id="program-filter"
+                class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">All programs</option>
+          {% for p in programs %}
+            <option value="{{ p.id }}" {% if filters.program_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide" for="status-filter">Status</label>
+        <select id="status-filter"
+                class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">All statuses</option>
+          {% for s in ['draft', 'sent', 'accepted', 'rejected'] %}
+            <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s | title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide" for="template-filter">Template</label>
+        <select id="template-filter"
+                class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">All templates</option>
+          {% for t in ['h1', 'bugcrowd', 'markdown'] %}
+            <option value="{{ t }}" {% if filters.template == t %}selected{% endif %}>{{ t | upper }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="flex gap-2 items-end pb-0.5">
+        <button type="button" onclick="applyReportFilters()"
+                class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">
+          Filter
+        </button>
+        {% if filters.program_id or filters.status or filters.template %}
+          <a href="/reports" class="px-4 py-1.5 text-slate-400 hover:text-white text-sm rounded transition-colors">Clear</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Reports table -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden" id="reports-table">
+    {% include "reports/_table.html" %}
+  </div>
+
 </div>
+
+<!-- ================================================================ NEW REPORT MODAL -->
+<dialog id="new-report-modal"
+        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-lg w-full backdrop:bg-black/60">
+  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+    <h2 class="text-lg font-semibold">New Report</h2>
+    <button onclick="document.getElementById('new-report-modal').close()"
+            class="text-slate-400 hover:text-white text-xl leading-none">✕</button>
+  </div>
+  <form id="new-report-form" class="px-6 py-4 space-y-4">
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200" for="nr-program">Program</label>
+      <select id="nr-program" name="program_id" onchange="loadProgramFindings()"
+              class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="">— None —</option>
+        {% for p in programs %}
+          <option value="{{ p.id }}">{{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200">Findings</label>
+      <div id="findings-select" class="text-xs text-slate-400">Select a program to load findings.</div>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200" for="nr-template">Template</label>
+      <select id="nr-template" name="template"
+              class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="h1">HackerOne (H1)</option>
+        <option value="bugcrowd">Bugcrowd</option>
+        <option value="markdown">Markdown</option>
+      </select>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200" for="nr-title">Title <span class="text-slate-400 font-normal">(auto-filled)</span></label>
+      <input id="nr-title" type="text" name="title" placeholder="Auto-filled from first finding"
+             class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+    </div>
+  </form>
+  <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
+    <button onclick="document.getElementById('new-report-modal').close()"
+            class="px-4 py-2 text-sm text-slate-300 hover:text-white rounded transition-colors">Cancel</button>
+    <button id="nr-submit" onclick="submitNewReport()"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">
+      Create Report
+    </button>
+  </div>
+</dialog>
+
 {% endblock %}
 
+{% block scripts %}
+<script>
+{% if open_modal %}
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('new-report-modal').showModal();
+});
+{% endif %}
+
+function applyReportFilters() {
+  const params = new URLSearchParams();
+  const prog = document.getElementById('program-filter').value;
+  if (prog) params.set('program_id', prog);
+  const status = document.getElementById('status-filter').value;
+  if (status) params.set('status', status);
+  const tmpl = document.getElementById('template-filter').value;
+  if (tmpl) params.set('template', tmpl);
+  const url = '/reports?' + params.toString();
+  htmx.ajax('GET', url, { target: '#reports-table', swap: 'innerHTML', headers: { 'HX-Request': 'true' } });
+  history.pushState(null, '', url);
+}
+
+async function loadProgramFindings() {
+  const pid = document.getElementById('nr-program').value;
+  const container = document.getElementById('findings-select');
+  if (!pid) {
+    container.innerHTML = '<span class="text-xs text-slate-400">Select a program to load findings.</span>';
+    return;
+  }
+  container.innerHTML = '<span class="text-xs text-slate-400">Loading…</span>';
+  try {
+    const r = await fetch('/api/findings?program_id=' + pid + '&per_page=50');
+    const data = await r.json();
+    const items = data.items || [];
+    if (!items.length) {
+      container.innerHTML = '<span class="text-xs text-slate-400">No findings for this program.</span>';
+      return;
+    }
+    container.innerHTML = items.map(f =>
+      `<label class="flex items-center gap-2 text-sm cursor-pointer py-1">
+         <input type="checkbox" name="finding_ids" value="${f.id}" class="accent-blue-500">
+         <span class="text-slate-200">${f.title}</span>
+         <span class="text-xs text-slate-500">[${f.severity_label}]</span>
+       </label>`
+    ).join('');
+  } catch (e) {
+    container.innerHTML = '<span class="text-xs text-red-400">Failed to load findings.</span>';
+  }
+}
+
+async function submitNewReport() {
+  const form = document.getElementById('new-report-form');
+  const btn = document.getElementById('nr-submit');
+  const programId = document.getElementById('nr-program').value || null;
+  const template = document.getElementById('nr-template').value;
+  const title = document.getElementById('nr-title').value.trim();
+  const findingIds = [...form.querySelectorAll('input[name="finding_ids"]:checked')].map(i => i.value);
+
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+  try {
+    const r = await fetch('/api/reports', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ program_id: programId, finding_ids: findingIds, template, title }),
+    });
+    if (r.ok) {
+      const resp = await r.json();
+      document.getElementById('new-report-modal').close();
+      toast('Report created', 'success');
+      setTimeout(() => window.location.href = '/reports/' + resp.id, 600);
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Failed: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Create Report';
+  }
+}
+</script>
+{% endblock %}

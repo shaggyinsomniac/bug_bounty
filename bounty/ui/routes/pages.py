@@ -781,13 +781,163 @@ async def secrets_page(
 
 
 @router.get("/reports", response_class=HTMLResponse)
-async def reports_page(request: Request, _auth: PageAuthDep) -> Response:
-    return _tmpl(request, "reports/list.html", {})
+async def reports_page(
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+    program_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    template: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=25, ge=1, le=200),
+) -> Response:
+    """Reports list page."""
+    is_htmx = bool(request.headers.get("HX-Request"))
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if program_id:
+        clauses.append("program_id = ?")
+        params.append(program_id)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if template:
+        clauses.append("template = ?")
+        params.append(template)
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    count_params = list(params)
+    limit = per_page
+    offset = (page - 1) * per_page
+
+    async with get_conn(db_path) as conn:
+        cnt_cur = await conn.execute(f"SELECT COUNT(*) FROM reports {where}", count_params)
+        cnt_row = await cnt_cur.fetchone()
+        total: int = cnt_row[0] if cnt_row else 0
+
+        params_q = list(count_params) + [limit, offset]
+        cur = await conn.execute(
+            f"SELECT * FROM reports {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            params_q,
+        )
+        reports_list: list[dict[str, Any]] = []
+        for r in await cur.fetchall():
+            d: dict[str, Any] = {k: r[k] for k in r.keys()}
+            if isinstance(d.get("finding_ids"), str):
+                try:
+                    d["finding_ids"] = json.loads(d["finding_ids"])
+                except (json.JSONDecodeError, ValueError):
+                    d["finding_ids"] = []
+            reports_list.append(d)
+
+        pcur = await conn.execute("SELECT id, name FROM programs ORDER BY name")
+        programs = [{k: r[k] for k in r.keys()} for r in await pcur.fetchall()]
+
+    context: dict[str, Any] = {
+        "reports": reports_list,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "programs": programs,
+        "filters": {
+            "program_id": program_id or "",
+            "status": status or "",
+            "template": template or "",
+        },
+    }
+    tmpl = "reports/_table.html" if is_htmx else "reports/list.html"
+    return _tmpl(request, tmpl, context)
+
+
+@router.get("/reports/new", response_class=HTMLResponse)
+async def reports_new_page(
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+) -> Response:
+    """New report page — renders list.html with modal open."""
+    async with get_conn(db_path) as conn:
+        pcur = await conn.execute("SELECT id, name FROM programs ORDER BY name")
+        programs = [{k: r[k] for k in r.keys()} for r in await pcur.fetchall()]
+    return _tmpl(request, "reports/list.html", {
+        "reports": [],
+        "total": 0,
+        "page": 1,
+        "per_page": 25,
+        "programs": programs,
+        "filters": {"program_id": "", "status": "", "template": ""},
+        "open_modal": True,
+    })
+
+
+@router.get("/reports/{report_id}", response_class=HTMLResponse)
+async def report_detail(
+    report_id: int,
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+) -> Response:
+    """Report detail/editor page."""
+    async with get_conn(db_path) as conn:
+        cur = await conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,))
+        row = await cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Report not found")
+
+        report: dict[str, Any] = {k: row[k] for k in row.keys()}
+        if isinstance(report.get("finding_ids"), str):
+            try:
+                report["finding_ids"] = json.loads(report["finding_ids"])
+            except (json.JSONDecodeError, ValueError):
+                report["finding_ids"] = []
+
+        # Fetch linked findings
+        findings: list[dict[str, Any]] = []
+        for fid in (report.get("finding_ids") or []):
+            f_cur = await conn.execute("SELECT * FROM findings WHERE id = ?", (fid,))
+            f_row = await f_cur.fetchone()
+            if f_row:
+                findings.append(_finding_row_p(f_row))
+
+        pcur = await conn.execute("SELECT id, name FROM programs ORDER BY name")
+        programs = [{k: r[k] for k in r.keys()} for r in await pcur.fetchall()]
+
+    return _tmpl(request, "reports/detail.html", {
+        "report": report,
+        "findings": findings,
+        "programs": programs,
+    })
 
 
 @router.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request, _auth: PageAuthDep) -> Response:
-    return _tmpl(request, "settings/list.html", {})
+async def settings_page(
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+) -> Response:
+    """Settings page."""
+    from bounty.config import get_settings
+    settings = get_settings()
+
+    # Evidence dir size
+    ev_dir = db_path.parent / "evidence"
+    ev_bytes = sum(
+        f.stat().st_size for f in ev_dir.rglob("*") if f.is_file()
+    ) if ev_dir.exists() else 0
+
+    db_bytes = db_path.stat().st_size if db_path.exists() else 0
+
+    return _tmpl(request, "settings/list.html", {
+        "db_path": str(db_path),
+        "db_size_bytes": db_bytes,
+        "ev_size_bytes": ev_bytes,
+        "shodan_configured": bool(settings.shodan_api_key),
+        "ui_token_configured": settings.ui_token is not None,
+        "default_intensity": settings.default_intensity,
+        "discord_webhook_findings": settings.discord_webhook_findings,
+        "discord_webhook_secrets": settings.discord_webhook_secrets,
+    })
 
 
 # ---------------------------------------------------------------------------
