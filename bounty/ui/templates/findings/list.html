@@ -1,13 +1,195 @@
 {% extends "_base.html" %}
+{% from "components/finding_row.html" import finding_row %}
+{% from "components/empty_state.html" import empty_state %}
+
 {% block title %}Findings{% endblock %}
+
 {% block content %}
-<div class="space-y-4">
-  <h1 class="text-2xl font-bold text-slate-100">Findings</h1>
-  <div class="bg-slate-800 border border-slate-700 rounded-lg p-8 text-center text-slate-400">
-    <div class="text-4xl mb-3">🐛</div>
-    <h2 class="text-lg font-semibold text-slate-300 mb-2">Coming in next phase</h2>
-    <p class="text-sm">Full findings browser with severity filtering, evidence viewer, and report builder.</p>
+<div class="space-y-6">
+
+  <!-- Header row -->
+  <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <h1 class="text-2xl font-bold text-slate-100">Findings</h1>
+      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-700 text-slate-300">
+        {{ total }}
+      </span>
+    </div>
   </div>
+
+  <!-- Filter bar -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+    <div class="flex flex-wrap gap-4 items-end">
+
+      <!-- Severity checkboxes -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide">Severity</label>
+        <div class="flex items-center gap-2 flex-wrap" id="severity-checkboxes">
+          {% for sev in ['info', 'low', 'medium', 'high', 'critical'] %}
+            <label class="flex items-center gap-1 text-xs cursor-pointer select-none">
+              <input type="checkbox"
+                     name="severity_cb"
+                     value="{{ sev }}"
+                     {% if sev in severities_checked %}checked{% endif %}
+                     class="accent-blue-500"
+                     onchange="updateSeverityParam()">
+              <span class="sev-label-{{ sev }} font-medium capitalize">{{ sev }}</span>
+            </label>
+          {% endfor %}
+        </div>
+        <input type="hidden" id="severity-param" name="severity"
+               value="{{ filters.severity }}">
+      </div>
+
+      <!-- Status dropdown -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide" for="status-filter">Status</label>
+        <select id="status-filter" name="status"
+                class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">All statuses</option>
+          {% for s in ['new', 'triaged', 'reported', 'accepted', 'dismissed', 'duplicate'] %}
+            <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>
+              {{ s | title }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Category text input -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide" for="category-filter">Category</label>
+        <input id="category-filter" type="text" name="category"
+               value="{{ filters.category }}"
+               placeholder="e.g. sqli, xss"
+               class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm w-36
+                      focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+      </div>
+
+      <!-- Search input -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide" for="search-filter">Search</label>
+        <input id="search-filter" type="search" name="search"
+               value="{{ filters.search }}"
+               placeholder="title or URL…"
+               class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm w-44
+                      focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+      </div>
+
+      <!-- Validated-only toggle -->
+      <div class="flex flex-col gap-1 justify-end pb-1">
+        <label class="flex items-center gap-2 text-sm cursor-pointer select-none text-slate-300">
+          <input type="checkbox" id="validated-only" name="validated_only"
+                 value="true"
+                 {% if filters.validated_only %}checked{% endif %}
+                 class="accent-blue-500">
+          Validated only
+        </label>
+      </div>
+
+      <!-- Filter button -->
+      <div class="flex gap-2 items-end pb-0.5">
+        <button id="filter-btn" type="button"
+                onclick="applyFilters()"
+                class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">
+          Filter
+        </button>
+        {% if filters.severity or filters.status or filters.category or filters.search or filters.validated_only %}
+          <a href="/findings"
+             class="px-4 py-1.5 text-slate-400 hover:text-white text-sm rounded transition-colors">
+            Clear
+          </a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Findings table -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden"
+       id="findings-table">
+    {% include "findings/_table.html" %}
+  </div>
+
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateSeverityParam() {
+  const checked = [...document.querySelectorAll('#severity-checkboxes input:checked')]
+    .map(cb => cb.value);
+  document.getElementById('severity-param').value = checked.join(',');
+}
+
+function applyFilters() {
+  updateSeverityParam();
+  const params = new URLSearchParams();
+  const sev = document.getElementById('severity-param').value;
+  if (sev) params.set('severity', sev);
+  const status = document.getElementById('status-filter').value;
+  if (status) params.set('status', status);
+  const cat = document.getElementById('category-filter').value.trim();
+  if (cat) params.set('category', cat);
+  const search = document.getElementById('search-filter').value.trim();
+  if (search) params.set('search', search);
+  const validated = document.getElementById('validated-only').checked;
+  if (validated) params.set('validated_only', 'true');
+
+  const url = '/findings?' + params.toString();
+
+  htmx.ajax('GET', url, {
+    target: '#findings-table',
+    swap: 'innerHTML',
+    headers: { 'HX-Request': 'true' }
+  });
+  history.pushState(null, '', url);
+}
+
+// SSE: listen for finding.discovered events and prepend row
+document.addEventListener('DOMContentLoaded', () => {
+  if (typeof Alpine !== 'undefined') {
+    const checkStore = () => {
+      try {
+        const sseStore = Alpine.store('sse');
+        if (sseStore && sseStore.subscribe) {
+          sseStore.subscribe('finding.discovered', () => {
+            const tbody = document.getElementById('findings-tbody');
+            if (!tbody) return;
+            fetch('/findings?page=1&per_page=1', {
+              headers: { 'HX-Request': 'true' }
+            })
+              .then(r => r.text())
+              .then(html => {
+                const tmp = document.createElement('table');
+                tmp.innerHTML = html;
+                const newRow = tmp.querySelector('tr[id^="finding-"]');
+                if (newRow) {
+                  newRow.classList.add('flash-new');
+                  tbody.prepend(newRow);
+                  setTimeout(() => newRow.classList.remove('flash-new'), 2000);
+                }
+              });
+          });
+        } else {
+          setTimeout(checkStore, 500);
+        }
+      } catch(e) { /* SSE store not available */ }
+    };
+    setTimeout(checkStore, 100);
+  }
+});
+</script>
+<style>
+.sev-label-critical { color: var(--color-critical, #ef4444); }
+.sev-label-high     { color: var(--color-high, #f97316); }
+.sev-label-medium   { color: var(--color-medium, #eab308); }
+.sev-label-low      { color: var(--color-low, #3b82f6); }
+.sev-label-info     { color: var(--color-info, #94a3b8); }
+@keyframes flash-new {
+  0%   { background-color: rgba(59, 130, 246, 0.25); }
+  100% { background-color: transparent; }
+}
+.flash-new { animation: flash-new 2s ease-out; }
+</style>
 {% endblock %}
 

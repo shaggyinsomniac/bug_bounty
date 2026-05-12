@@ -255,8 +255,75 @@ async def assets_page(request: Request, _auth: PageAuthDep) -> Response:
 
 
 @router.get("/findings", response_class=HTMLResponse)
-async def findings_page(request: Request, _auth: PageAuthDep) -> Response:
-    return _tmpl(request, "findings/list.html", {})
+async def findings_page(
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+    severity: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    validated_only: bool = Query(default=False),
+    search: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=25, ge=1, le=200),
+) -> Response:
+    """Findings list page with filtering, pagination, and HTMX partial support."""
+    severities = [s.strip() for s in severity.split(",")] if severity else []
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if severities:
+        placeholders = ",".join("?" * len(severities))
+        clauses.append(f"severity_label IN ({placeholders})")
+        params.extend(severities)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if category:
+        clauses.append("category LIKE ?")
+        params.append(f"%{category}%")
+    if validated_only:
+        clauses.append("validated = 1")
+    if search:
+        clauses.append("(title LIKE ? OR url LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    count_params = list(params)
+    limit = per_page
+    offset = (page - 1) * per_page
+    params.extend([limit, offset])
+
+    async with get_conn(db_path) as conn:
+        cur = await conn.execute(
+            f"SELECT * FROM findings {where} ORDER BY severity DESC, created_at DESC LIMIT ? OFFSET ?",
+            params,
+        )
+        findings = [_finding_row_p(r) for r in await cur.fetchall()]
+
+        cnt = await conn.execute(f"SELECT COUNT(*) FROM findings {where}", count_params)
+        cnt_row = await cnt.fetchone()
+        total: int = cnt_row[0] if cnt_row else 0
+
+    context: dict[str, Any] = {
+        "findings": findings,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "filters": {
+            "severity": severity or "",
+            "status": status or "",
+            "category": category or "",
+            "validated_only": validated_only,
+            "search": search or "",
+        },
+        "severities_checked": severities,
+    }
+
+    is_htmx = bool(request.headers.get("HX-Request"))
+    template = "findings/_table.html" if is_htmx else "findings/list.html"
+    return _tmpl(request, template, context)
 
 
 @router.get("/programs", response_class=HTMLResponse)

@@ -3,19 +3,30 @@
 {% macro finding_row(f) %}
 <tr id="finding-{{ f.id }}"
     class="border-b border-slate-700 hover:bg-slate-750 cursor-pointer"
+    hx-get="/findings/{{ f.id }}"
+    hx-target="#main-content"
+    hx-push-url="true"
+    data-finding-id="{{ f.id }}"
     onclick="window.location='/findings/{{ f.id }}'">
   <td class="px-3 py-2">
     {{ severity_badge(f.severity_label | default('info')) }}
   </td>
+  <td class="px-3 py-2">
+    {{ status_pill(f.status | default('new')) }}
+  </td>
   <td class="px-3 py-2 text-sm font-medium text-slate-200 max-w-xs">
     <div class="truncate" title="{{ f.title }}">{{ f.title }}</div>
   </td>
-  <td class="px-3 py-2 text-sm font-mono text-slate-400 max-w-xs">
-    <div class="truncate" title="{{ f.url | default('') }}">{{ (f.url | default(''))[:60] }}</div>
+  <td class="px-3 py-2 text-xs font-mono text-slate-400 max-w-xs">
+    <div class="truncate" title="{{ f.url | default('') }}">{{ (f.url | default(''))[:50] }}</div>
   </td>
   <td class="px-3 py-2 text-xs text-slate-400">{{ f.category | default('') }}</td>
-  <td class="px-3 py-2">
-    {{ status_pill(f.status | default('new')) }}
+  <td class="px-3 py-2 text-center text-sm">
+    {% if f.validated %}
+      <span class="text-green-400" title="Validated">✓</span>
+    {% else %}
+      <span class="text-slate-600" title="Not validated">✗</span>
+    {% endif %}
   </td>
   <td class="px-3 py-2 text-xs text-slate-500">
     {{ f.created_at | default('') | string | truncate(16, True, '') }}

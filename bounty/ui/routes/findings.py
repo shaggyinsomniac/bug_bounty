@@ -84,10 +84,24 @@ async def list_findings(
     status: str | None = Query(default=None),
     validated_only: bool = Query(default=False),
     search: str | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=200),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=1, le=200),
+    limit: int | None = Query(default=None, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> JSONResponse:
     """Paginated findings list with optional filters."""
+    # Determine effective limit/offset: explicit limit/offset take precedence over page/per_page
+    if limit is not None:
+        _limit = limit
+        _offset = offset
+        _page = (_offset // _limit) + 1
+        _per_page = _limit
+    else:
+        _per_page = per_page
+        _limit = per_page
+        _page = page
+        _offset = (page - 1) * per_page
+
     clauses: list[str] = []
     params: list[Any] = []
 
@@ -95,8 +109,10 @@ async def list_findings(
         clauses.append("program_id = ?")
         params.append(program_id)
     if severity_label:
-        clauses.append("severity_label = ?")
-        params.append(severity_label)
+        labels = [s.strip() for s in severity_label.split(",")]
+        placeholders = ",".join("?" * len(labels))
+        clauses.append(f"severity_label IN ({placeholders})")
+        params.extend(labels)
     if category:
         clauses.append("category = ?")
         params.append(category)
@@ -111,7 +127,7 @@ async def list_findings(
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     count_params = list(params)
-    params.extend([limit, offset])
+    params.extend([_limit, _offset])
 
     async with get_conn(db_path) as conn:
         cur = await conn.execute(
@@ -131,8 +147,10 @@ async def list_findings(
         {
             "items": [_finding_row(r) for r in rows],
             "total": total,
-            "limit": limit,
-            "offset": offset,
+            "page": _page,
+            "per_page": _per_page,
+            "limit": _limit,
+            "offset": _offset,
         }
     )
 

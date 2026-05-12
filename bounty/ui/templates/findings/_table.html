@@ -1,0 +1,51 @@
+{% from "components/finding_row.html" import finding_row %}
+{% from "components/empty_state.html" import empty_state %}
+
+{% if findings %}
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-xs text-slate-400 uppercase border-b border-slate-700 bg-slate-850">
+        <th class="px-3 py-2 text-left w-24">Severity</th>
+        <th class="px-3 py-2 text-left w-28">Status</th>
+        <th class="px-3 py-2 text-left">Title</th>
+        <th class="px-3 py-2 text-left">Asset Host</th>
+        <th class="px-3 py-2 text-left">Category</th>
+        <th class="px-3 py-2 text-center w-20">Valid</th>
+        <th class="px-3 py-2 text-left w-36">Created</th>
+      </tr>
+    </thead>
+    <tbody id="findings-tbody">
+      {% for f in findings %}
+        {{ finding_row(f) }}
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% set total_pages = ((total - 1) // per_page + 1) if total > 0 else 1 %}
+  {% if total > per_page %}
+    <div class="flex items-center justify-between px-4 py-3 border-t border-slate-700 text-sm text-slate-400">
+      <span>Showing {{ (page - 1) * per_page + 1 }}–{{ [page * per_page, total] | min }} of {{ total }}</span>
+      <div class="flex gap-2">
+        {% if page > 1 %}
+          <a href="/findings?page={{ page - 1 }}{% if filters.severity %}&severity={{ filters.severity }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.category %}&category={{ filters.category }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}{% if filters.validated_only %}&validated_only=true{% endif %}"
+             hx-get="/findings?page={{ page - 1 }}{% if filters.severity %}&severity={{ filters.severity }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.category %}&category={{ filters.category }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}{% if filters.validated_only %}&validated_only=true{% endif %}"
+             hx-target="#findings-table"
+             hx-push-url="true"
+             class="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded transition-colors">← Prev</a>
+        {% endif %}
+        {% if page * per_page < total %}
+          <a href="/findings?page={{ page + 1 }}{% if filters.severity %}&severity={{ filters.severity }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.category %}&category={{ filters.category }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}{% if filters.validated_only %}&validated_only=true{% endif %}"
+             hx-get="/findings?page={{ page + 1 }}{% if filters.severity %}&severity={{ filters.severity }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.category %}&category={{ filters.category }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}{% if filters.validated_only %}&validated_only=true{% endif %}"
+             hx-target="#findings-table"
+             hx-push-url="true"
+             class="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded transition-colors">Next →</a>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+{% else %}
+  {{ empty_state('🐛', 'No findings yet',
+     'Findings will appear here after running scans against your targets.',
+     '', '') }}
+{% endif %}
+
