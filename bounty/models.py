@@ -433,6 +433,8 @@ class SecretValidation(_Base):
     last_checked: datetime | None = None
     next_check: datetime | None = None
     error_message: str | None = None
+    source: str = "native"
+    """Detection source: ``'native'`` (bounty scanner) or ``'trufflehog'``."""
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

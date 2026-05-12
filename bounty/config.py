@@ -121,6 +121,16 @@ class Settings(BaseSettings):
     secret_validation_max_concurrent: int = 5
     """Maximum number of concurrent token-validation API calls."""
 
+    # --------------------------------------------------------- trufflehog
+    trufflehog_enabled: bool = True
+    """Run TruffleHog on evidence bodies to inherit ~800 community secret patterns."""
+
+    trufflehog_binary_path: Path = Path("~/.bounty/tools/trufflehog")
+    """Path to the TruffleHog binary.  Resolved with expanduser() at runtime."""
+
+    trufflehog_timeout_seconds: int = 60
+    """Maximum seconds to wait for each TruffleHog subprocess invocation."""
+
     # --------------------------------------------------------- validators
     @field_validator("default_intensity")
     @classmethod
@@ -130,7 +140,10 @@ class Settings(BaseSettings):
             raise ValueError(f"default_intensity must be one of {allowed}, got {v!r}")
         return v
 
-    @field_validator("data_dir", "tools_dir", "nuclei_templates_dir", mode="before")
+    @field_validator(
+        "data_dir", "tools_dir", "nuclei_templates_dir", "trufflehog_binary_path",
+        mode="before",
+    )
     @classmethod
     def _expand_path(cls, v: object) -> Path:
         """Resolve ``~`` and relative paths to absolute ``Path`` objects."""

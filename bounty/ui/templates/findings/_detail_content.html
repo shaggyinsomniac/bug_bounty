@@ -222,6 +222,7 @@
             <th class="px-3 py-2 text-left">Provider</th>
             <th class="px-3 py-2 text-left">Preview</th>
             <th class="px-3 py-2 text-left">Status</th>
+            <th class="px-3 py-2 text-left">Source</th>
             <th class="px-3 py-2 text-left">Identity</th>
             <th class="px-3 py-2 text-left">Scope</th>
             <th class="px-3 py-2 text-left"></th>
@@ -239,6 +240,18 @@
                            {% else %}bg-yellow-900/50 text-yellow-400 border border-yellow-700/50{% endif %}">
                 {{ sv.status }}
               </span>
+            </td>
+            <td class="px-3 py-2">
+              {% set src = sv.source if sv.source else 'native' %}
+              {% if src == 'trufflehog' %}
+                <span class="px-2 py-0.5 rounded text-xs font-medium bg-purple-900/60 text-purple-300 border border-purple-700/50">
+                  trufflehog
+                </span>
+              {% else %}
+                <span class="px-2 py-0.5 rounded text-xs font-medium bg-slate-700 text-slate-400">
+                  native
+                </span>
+              {% endif %}
             </td>
             <td class="px-3 py-2 text-slate-400">{{ sv.identity | default('—') }}</td>
             <td class="px-3 py-2 text-slate-500 font-mono max-w-xs truncate">

@@ -207,6 +207,52 @@ Browser -> FastAPI
 
 ---
 
+## TruffleHog Integration
+
+Phase 14a integrates [TruffleHog OSS](https://github.com/trufflesecurity/trufflehog) as an optional subprocess, extending native secret detection with ~800 community-maintained secret patterns and ~100 token validators.
+
+### Install
+
+```bash
+bounty tools install-trufflehog
+```
+
+This downloads the platform-appropriate binary from GitHub Releases into `~/.bounty/tools/trufflehog` and marks it executable.  No Python packages are installed — only a subprocess call.
+
+### Coverage
+
+| Source | Patterns | Validators |
+|---|---|---|
+| Native (bounty) | ~39 | 39 (all validated via direct API calls) |
+| TruffleHog | ~800 | ~100 community detectors |
+
+TruffleHog scans each HTTP response body captured by the evidence pipeline.  Detectors include AWS, GCP, Azure, GitHub, Stripe, Slack, Discord, Shopify, OpenAI, Anthropic, and hundreds more.
+
+### Precedence Rules
+
+1. **Native validator takes precedence** — if bounty has a registered validator for a provider, TruffleHog results for that provider are skipped.
+2. **TruffleHog fills the gaps** — for unknown or unsupported providers, TruffleHog detections are persisted with `source='trufflehog'`.
+3. **Verified = live** — TruffleHog's `verified: true` maps to `status='live'`; otherwise `status='invalid'`.
+
+### Database
+
+The `secrets_validations` table now has a `source` column:
+
+```sql
+SELECT source, COUNT(*) FROM secrets_validations GROUP BY source;
+-- native     | 14   (bounty's 14-key direct validators)
+-- trufflehog | 8    (additional patterns only TruffleHog detected)
+```
+
+### Without TruffleHog
+
+The tool runs normally without TruffleHog installed.  If the binary is missing:
+- No subprocess is spawned
+- A warning is logged once per scan
+- Native detection + validation continues unaffected
+
+---
+
 ## Development
 
 ```bash

@@ -850,6 +850,17 @@ ALTER TABLE reports_v8 RENAME TO reports;
 COMMIT;
 """
 
+# v9 migration: add source column to secrets_validations.
+# 'native' = detected by bounty's own scanner/validators.
+# 'trufflehog' = detected by the TruffleHog subprocess (Phase 14a).
+_MIGRATION_V9 = """
+BEGIN TRANSACTION;
+
+ALTER TABLE secrets_validations ADD COLUMN source TEXT NOT NULL DEFAULT 'native';
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
     _MIGRATION_V1,
     # v2 → add leads table for intel / Shodan triage.
@@ -870,6 +881,10 @@ _MIGRATIONS: list[str] = [
     # v8 → restructure reports: multi-finding (finding_ids JSON array), program_id,
     #       template field (h1/bugcrowd/markdown), status normalised to draft/sent/accepted/rejected.
     _MIGRATION_V8,
+    # v9 (Phase 14a) → add source column to secrets_validations.
+    #   'native'     = detected + validated by bounty's own scanner/validators.
+    #   'trufflehog' = detected by TruffleHog subprocess.
+    _MIGRATION_V9,
 ]
 
 

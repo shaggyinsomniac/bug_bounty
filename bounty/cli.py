@@ -48,6 +48,9 @@ app.add_typer(findings_app, name="findings")
 secrets_app = typer.Typer(help="Query and revalidate discovered secret tokens.")
 app.add_typer(secrets_app, name="secrets")
 
+tools_app = typer.Typer(help="Manage external tool binaries (trufflehog, etc.).")
+app.add_typer(tools_app, name="tools")
+
 log = get_logger(__name__)
 
 _INTENSITY_CHOICES = ("gentle", "normal", "aggressive")
@@ -1608,6 +1611,161 @@ def serve_cmd(
         port=port,
         reload=reload,
     )
+
+
+# ---------------------------------------------------------------------------
+# tools sub-commands
+# ---------------------------------------------------------------------------
+
+_TRUFFLEHOG_GITHUB_RELEASES = (
+    "https://github.com/trufflesecurity/trufflehog/releases/latest/download/"
+)
+
+
+def _trufflehog_asset_name() -> str:
+    """Return the platform-specific TruffleHog release asset filename."""
+    import platform as _platform
+
+    system = _platform.system().lower()
+    machine = _platform.machine().lower()
+
+    if system == "darwin":
+        arch = "arm64" if machine in ("arm64", "aarch64") else "amd64"
+        return f"trufflehog_{system}_{arch}.tar.gz"
+    elif system == "linux":
+        arch = "arm64" if machine in ("arm64", "aarch64") else "amd64"
+        return f"trufflehog_{system}_{arch}.tar.gz"
+    elif system == "windows":
+        return "trufflehog_windows_amd64.tar.gz"
+    else:
+        # Fallback — let the user handle it
+        return f"trufflehog_{system}_amd64.tar.gz"
+
+
+@tools_app.command("install-trufflehog")
+def install_trufflehog_cmd(
+    dest: Annotated[
+        Path | None,
+        typer.Option(
+            "--dest",
+            "-d",
+            help="Destination path for the binary (default: ~/.bounty/tools/trufflehog)",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Re-download even if binary already exists"),
+    ] = False,
+) -> None:
+    """Download the TruffleHog OSS binary for this platform.
+
+    Downloads from GitHub Releases into ``~/.bounty/tools/trufflehog`` (or
+    a custom path supplied via ``--dest``) and makes it executable.
+
+    Run this once before using TruffleHog-backed secret detection::
+
+        bounty tools install-trufflehog
+    """
+    import os
+    import stat
+    import tarfile
+    import tempfile
+    import urllib.request
+
+    install_path = dest or (Path.home() / ".bounty" / "tools" / "trufflehog")
+
+    if install_path.exists() and not force:
+        typer.echo(
+            f"[bounty tools install-trufflehog] TruffleHog already installed at {install_path}"
+        )
+        typer.echo("  Use --force to re-download.")
+        return
+
+    install_path.parent.mkdir(parents=True, exist_ok=True)
+
+    asset_name = _trufflehog_asset_name()
+    url = _TRUFFLEHOG_GITHUB_RELEASES + asset_name
+
+    typer.echo(f"[bounty tools install-trufflehog] Downloading {url}")
+    typer.echo(f"  → {install_path}")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tarball_path = Path(tmpdir) / asset_name
+
+            # Download with progress indicator
+            def _report(count: int, block_size: int, total_size: int) -> None:
+                if total_size > 0:
+                    pct = min(count * block_size * 100 // total_size, 100)
+                    typer.echo(f"\r  {pct}%", nl=False)
+
+            urllib.request.urlretrieve(url, str(tarball_path), _report)
+            typer.echo("")  # newline after progress
+
+            # Extract the 'trufflehog' binary from the tarball
+            with tarfile.open(str(tarball_path), "r:gz") as tar:
+                # Find the binary member
+                binary_member = None
+                for member in tar.getmembers():
+                    name = member.name.lstrip("./")
+                    if name == "trufflehog" or name.endswith("/trufflehog"):
+                        binary_member = member
+                        break
+
+                if binary_member is None:
+                    typer.echo(
+                        "[error] Could not find 'trufflehog' binary in the downloaded archive.",
+                        err=True,
+                    )
+                    raise typer.Exit(1)
+
+                extracted = tar.extractfile(binary_member)
+                if extracted is None:
+                    typer.echo("[error] Could not extract trufflehog binary.", err=True)
+                    raise typer.Exit(1)
+
+                install_path.write_bytes(extracted.read())
+
+        # chmod +x
+        current_mode = install_path.stat().st_mode
+        install_path.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] Download failed: {exc}", err=True)
+        typer.echo(
+            "\nManual install alternative:\n"
+            f"  Download: {url}\n"
+            f"  Extract binary to: {install_path}\n"
+            "  chmod +x <path>",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"[bounty tools install-trufflehog] ✓ Installed TruffleHog at {install_path}"
+    )
+
+
+@tools_app.command("check")
+def tools_check_cmd() -> None:
+    """Check which external tool binaries are available."""
+    from bounty.tools import get_trufflehog_path
+
+    settings = get_settings()
+    trufflehog = get_trufflehog_path(
+        Path(str(settings.trufflehog_binary_path)).expanduser()
+        if settings.trufflehog_binary_path
+        else None
+    )
+
+    typer.echo("External tools status:")
+    if trufflehog:
+        typer.echo(f"  trufflehog  ✓  {trufflehog}")
+    else:
+        typer.echo(
+            "  trufflehog  ✗  not found  "
+            "(run: bounty tools install-trufflehog)"
+        )
 
 
 if __name__ == "__main__":
