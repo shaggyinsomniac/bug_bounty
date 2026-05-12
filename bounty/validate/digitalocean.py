@@ -1,12 +1,8 @@
 """
-bounty.validate.mailchimp — Mailchimp API key validator via ping endpoint.
-
-Key format: <32-hex>-us<N>  — datacenter extracted from suffix.
+bounty.validate.digitalocean — DigitalOcean personal access token validator via /v2/account.
 """
 
 from __future__ import annotations
-
-import re
 
 import httpx
 
@@ -14,11 +10,9 @@ from bounty.models import ValidationResult
 from bounty.secrets.scanner import SecretCandidate
 from bounty.validate._base import Validator
 
-_DC_RE = re.compile(r"-?(us\d{1,2})$")
 
-
-class MailchimpValidator(Validator):
-    provider = "mailchimp"
+class DigitalOceanValidator(Validator):
+    provider = "digitalocean"
 
     async def validate(
         self,
@@ -26,21 +20,10 @@ class MailchimpValidator(Validator):
         http: httpx.AsyncClient,
     ) -> ValidationResult:
         key = candidate.value
-        m = _DC_RE.search(key)
-        if not m:
-            return ValidationResult(
-                provider=self.provider,
-                secret_preview=candidate.secret_preview,
-                secret_hash=candidate.secret_hash,
-                secret_pattern=candidate.pattern_name,
-                status="skipped",
-                error_message="needs mailchimp datacenter suffix (e.g. -us12)",
-            )
-        dc = m.group(1)
         try:
             resp = await http.get(
-                f"https://{dc}.api.mailchimp.com/3.0/ping",
-                auth=("anystring", key),
+                "https://api.digitalocean.com/v2/account",
+                headers={"Authorization": f"Bearer {key}"},
                 timeout=15,
             )
             if resp.status_code in (401, 403):
@@ -53,15 +36,18 @@ class MailchimpValidator(Validator):
                 )
             resp.raise_for_status()
             data = resp.json()
+            account = data.get("account", {})
+            email = account.get("email")
+            uuid = account.get("uuid")
             return ValidationResult(
                 provider=self.provider,
                 secret_preview=candidate.secret_preview,
                 secret_hash=candidate.secret_hash,
                 secret_pattern=candidate.pattern_name,
                 status="live",
-                identity=dc,
-                scope={"datacenter": dc, "health_status": data.get("health_status")},
-                raw_response=data,
+                identity=email,
+                scope={"uuid": uuid, "status": account.get("status")},
+                raw_response={"email": email, "uuid": uuid, "status": account.get("status")},
             )
         except httpx.HTTPStatusError as exc:
             return ValidationResult(
