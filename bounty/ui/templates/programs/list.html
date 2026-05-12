@@ -1,13 +1,184 @@
 {% extends "_base.html" %}
+{% from "components/empty_state.html" import empty_state %}
+
 {% block title %}Programs{% endblock %}
+
 {% block content %}
-<div class="space-y-4">
-  <h1 class="text-2xl font-bold text-slate-100">Programs</h1>
-  <div class="bg-slate-800 border border-slate-700 rounded-lg p-8 text-center text-slate-400">
-    <div class="text-4xl mb-3">🎯</div>
-    <h2 class="text-lg font-semibold text-slate-300 mb-2">Coming in next phase</h2>
-    <p class="text-sm">Program management UI with scope editor, platform sync, and target statistics.</p>
+<div class="space-y-6">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <h1 class="text-2xl font-bold text-slate-100">Programs</h1>
+      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-700 text-slate-300">
+        {{ total }}
+      </span>
+    </div>
+    <button onclick="document.getElementById('new-program-modal').showModal()"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors flex items-center gap-2">
+      <span>＋</span> New Program
+    </button>
   </div>
+
+  <!-- Filter bar -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+    <div class="flex flex-wrap gap-4 items-end">
+
+      <!-- Platform dropdown -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide" for="platform-filter">Platform</label>
+        <select id="platform-filter" name="platform"
+                class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">All platforms</option>
+          {% for pl in ['h1', 'bugcrowd', 'intigriti', 'manual'] %}
+            <option value="{{ pl }}" {% if filters.platform == pl %}selected{% endif %}>{{ pl | title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Active-only toggle -->
+      <div class="flex flex-col gap-1 justify-end pb-1">
+        <label class="flex items-center gap-2 text-sm cursor-pointer select-none text-slate-300">
+          <input type="checkbox" id="active-only" value="true"
+                 {% if filters.active_only %}checked{% endif %} class="accent-blue-500">
+          Active only
+        </label>
+      </div>
+
+      <!-- Filter button -->
+      <div class="flex gap-2 items-end pb-0.5">
+        <button type="button" onclick="applyProgramFilters()"
+                class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">
+          Filter
+        </button>
+        {% if filters.platform or filters.active_only %}
+          <a href="/programs"
+             class="px-4 py-1.5 text-slate-400 hover:text-white text-sm rounded transition-colors">
+            Clear
+          </a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Programs table -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden" id="programs-table">
+    {% include "programs/_table.html" %}
+  </div>
+
 </div>
+
+<!-- ================================================================ NEW PROGRAM MODAL -->
+<dialog id="new-program-modal"
+        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
+  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+    <h2 class="text-lg font-semibold">New Program</h2>
+    <button onclick="document.getElementById('new-program-modal').close()"
+            class="text-slate-400 hover:text-white text-xl leading-none">✕</button>
+  </div>
+
+  <form id="new-program-form" class="px-6 py-4 space-y-4">
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200" for="np-id">ID</label>
+      <input id="np-id" type="text" name="id" placeholder="unique-program-id" required
+             class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200" for="np-platform">Platform</label>
+      <select id="np-platform" name="platform"
+              class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
+                     focus:outline-none focus:ring-2 focus:ring-blue-500">
+        {% for pl in ['h1', 'bugcrowd', 'intigriti', 'manual'] %}
+          <option value="{{ pl }}">{{ pl | title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200" for="np-handle">Handle</label>
+      <input id="np-handle" type="text" name="handle" placeholder="program-handle" required
+             class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200" for="np-name">Name</label>
+      <input id="np-name" type="text" name="name" placeholder="Program Name" required
+             class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200" for="np-url">URL <span class="text-slate-400 font-normal">(optional)</span></label>
+      <input id="np-url" type="text" name="url" placeholder="https://hackerone.com/..."
+             class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+    </div>
+  </form>
+
+  <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
+    <button onclick="document.getElementById('new-program-modal').close()"
+            class="px-4 py-2 text-sm text-slate-300 hover:text-white rounded transition-colors">
+      Cancel
+    </button>
+    <button id="np-submit" onclick="submitNewProgram()"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors disabled:opacity-50">
+      Create Program
+    </button>
+  </div>
+</dialog>
+
 {% endblock %}
 
+{% block scripts %}
+<script>
+function applyProgramFilters() {
+  const params = new URLSearchParams();
+  const platform = document.getElementById('platform-filter').value;
+  if (platform) params.set('platform', platform);
+  if (document.getElementById('active-only').checked) params.set('active_only', 'true');
+
+  const url = '/programs?' + params.toString();
+  htmx.ajax('GET', url, {
+    target: '#programs-table',
+    swap: 'innerHTML',
+    headers: { 'HX-Request': 'true' }
+  });
+  history.pushState(null, '', url);
+}
+
+async function submitNewProgram() {
+  const form = document.getElementById('new-program-form');
+  const btn = document.getElementById('np-submit');
+  const data = Object.fromEntries(new FormData(form));
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+  try {
+    const r = await fetch('/api/programs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: data.id,
+        platform: data.platform,
+        handle: data.handle,
+        name: data.name,
+        url: data.url || '',
+      }),
+    });
+    if (r.ok) {
+      const resp = await r.json();
+      document.getElementById('new-program-modal').close();
+      toast('Program created: ' + resp.name, 'success');
+      setTimeout(() => window.location.href = '/programs/' + resp.id, 800);
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Failed: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Create Program';
+  }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,307 @@
+{% extends "_base.html" %}
+{% from "components/finding_row.html" import finding_row %}
+{% from "components/scan_row.html" import scan_row %}
+{% from "components/empty_state.html" import empty_state %}
+
+{% block title %}{{ program.name }} — Program{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Back link + Header -->
+  <div class="space-y-2">
+    <a href="/programs" class="text-sm text-slate-400 hover:text-slate-200 transition-colors">
+      ← Back to Programs
+    </a>
+    <div class="flex items-center gap-3 flex-wrap">
+      <h1 class="text-2xl font-bold text-slate-100">{{ program.name }}</h1>
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+             {% if program.platform == 'h1' %}bg-red-900 text-red-300
+             {% elif program.platform == 'bugcrowd' %}bg-orange-900 text-orange-300
+             {% elif program.platform == 'intigriti' %}bg-purple-900 text-purple-300
+             {% else %}bg-slate-700 text-slate-300{% endif %}">
+        {{ program.platform }}
+      </span>
+      <!-- Active toggle -->
+      <button id="active-toggle"
+              onclick="toggleActive('{{ program.id }}', {{ 'true' if program.active else 'false' }})"
+              class="inline-flex items-center gap-1.5 px-3 py-0.5 rounded text-xs font-medium transition-colors
+                     {% if program.active %}bg-green-900 text-green-300 hover:bg-green-800
+                     {% else %}bg-slate-700 text-slate-400 hover:bg-slate-600{% endif %}">
+        <span>{{ '● Active' if program.active else '○ Inactive' }}</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Stats row -->
+  <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+    <div class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-center">
+      <div class="text-2xl font-bold text-slate-100">{{ program.asset_count }}</div>
+      <div class="text-xs text-slate-400 mt-1">Assets</div>
+    </div>
+    <div class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-center">
+      <div class="text-2xl font-bold text-slate-100">{{ program.finding_count }}</div>
+      <div class="text-xs text-slate-400 mt-1">Findings</div>
+    </div>
+    <div class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-center">
+      <div class="text-2xl font-bold text-slate-100">{{ program.scan_count }}</div>
+      <div class="text-xs text-slate-400 mt-1">Scans</div>
+    </div>
+    <div class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-center">
+      <div class="text-2xl font-bold text-red-400">{{ findings_by_severity.get('critical', 0) }}</div>
+      <div class="text-xs text-slate-400 mt-1">Critical</div>
+    </div>
+  </div>
+
+  <!-- Findings by severity breakdown -->
+  {% if findings_by_severity %}
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-3">Findings by Severity</h2>
+      <div class="flex flex-wrap gap-3">
+        {% for sev, count in findings_by_severity.items() %}
+          <div class="flex items-center gap-2">
+            <span class="severity-{{ sev }} text-xs font-bold uppercase">{{ sev }}</span>
+            <span class="text-slate-200 font-medium">{{ count }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+
+  <!-- Scope rules (targets) -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">
+        Scope Rules
+        <span class="ml-2 text-xs font-normal text-slate-500">({{ program.targets | length }})</span>
+      </h2>
+      <button onclick="document.getElementById('edit-scope-modal').showModal()"
+              class="text-xs text-blue-400 hover:text-blue-300 transition-colors">
+        Edit Scope
+      </button>
+    </div>
+    {% if program.targets %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-400 uppercase border-b border-slate-700">
+            <th class="px-3 py-2 text-left">Scope</th>
+            <th class="px-3 py-2 text-left">Type</th>
+            <th class="px-3 py-2 text-left">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in program.targets %}
+            <tr class="border-b border-slate-700">
+              <td class="px-3 py-2">
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                       {% if t.scope_type == 'in_scope' %}bg-green-900 text-green-300
+                       {% else %}bg-red-900 text-red-300{% endif %}">
+                  {{ t.scope_type | replace('_', ' ') }}
+                </span>
+              </td>
+              <td class="px-3 py-2 text-xs text-slate-400">{{ t.asset_type }}</td>
+              <td class="px-3 py-2 font-mono text-xs text-slate-200">{{ t.value }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      {{ empty_state('📋', 'No scope rules defined', 'Add targets to define what is in scope for this program.', '', '') }}
+    {% endif %}
+  </div>
+
+  <!-- Recent Scans -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Recent Scans</h2>
+      <button onclick="document.getElementById('run-scan-modal').showModal()"
+              class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors">
+        ＋ Run Scan
+      </button>
+    </div>
+    {% if recent_scans %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-400 uppercase border-b border-slate-700">
+            <th class="px-3 py-2 text-left">Scan ID</th>
+            <th class="px-3 py-2 text-left">Program</th>
+            <th class="px-3 py-2 text-left">Type</th>
+            <th class="px-3 py-2 text-left">Status</th>
+            <th class="px-3 py-2 text-left">Intensity</th>
+            <th class="px-3 py-2 text-left">Started</th>
+            <th class="px-3 py-2 text-right"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in recent_scans %}
+            {{ scan_row(s) }}
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      {{ empty_state('🔍', 'No scans yet', '', '', '') }}
+    {% endif %}
+  </div>
+
+  <!-- Recent Findings -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Recent Findings</h2>
+      {% if program.finding_count > 0 %}
+        <a href="/findings" class="text-xs text-blue-400 hover:underline">View all →</a>
+      {% endif %}
+    </div>
+    {% if recent_findings %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-400 uppercase border-b border-slate-700">
+            <th class="px-3 py-2 text-left w-24">Severity</th>
+            <th class="px-3 py-2 text-left w-28">Status</th>
+            <th class="px-3 py-2 text-left">Title</th>
+            <th class="px-3 py-2 text-left">Asset Host</th>
+            <th class="px-3 py-2 text-left">Category</th>
+            <th class="px-3 py-2 text-center w-20">Valid</th>
+            <th class="px-3 py-2 text-left w-36">Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in recent_findings %}
+            {{ finding_row(f) }}
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      {{ empty_state('🐛', 'No findings yet', '', '', '') }}
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- Edit Scope Modal (placeholder) -->
+<dialog id="edit-scope-modal"
+        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
+  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+    <h2 class="text-lg font-semibold">Edit Scope</h2>
+    <button onclick="document.getElementById('edit-scope-modal').close()"
+            class="text-slate-400 hover:text-white text-xl leading-none">✕</button>
+  </div>
+  <div class="px-6 py-8 text-center text-slate-400">
+    <div class="text-4xl mb-3">🚧</div>
+    <p class="text-sm">Manual scope edit coming in next phase.</p>
+  </div>
+  <div class="flex justify-end px-6 py-4 border-t border-slate-700">
+    <button onclick="document.getElementById('edit-scope-modal').close()"
+            class="px-4 py-2 text-sm text-slate-300 hover:text-white rounded transition-colors">
+      Close
+    </button>
+  </div>
+</dialog>
+
+<!-- Run Scan Modal -->
+<dialog id="run-scan-modal"
+        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
+  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+    <h2 class="text-lg font-semibold">Run Scan</h2>
+    <button onclick="document.getElementById('run-scan-modal').close()"
+            class="text-slate-400 hover:text-white text-xl leading-none">✕</button>
+  </div>
+  <form id="prog-scan-form" class="px-6 py-4 space-y-4">
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200">Scan Type</label>
+      <div class="flex flex-wrap gap-2">
+        {% for t in ['full', 'recon', 'detect', 'validate'] %}
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+            <input type="radio" name="scan_type" value="{{ t }}" {% if t == 'full' %}checked{% endif %}
+                   class="accent-blue-500">
+            {{ t | title }}
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-sm font-medium text-slate-200">Intensity</label>
+      <div class="flex gap-3">
+        {% for i in ['light', 'normal', 'aggressive'] %}
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+            <input type="radio" name="intensity" value="{{ i }}" {% if i == 'normal' %}checked{% endif %}
+                   class="accent-blue-500">
+            {{ i | title }}
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+  </form>
+  <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
+    <button onclick="document.getElementById('run-scan-modal').close()"
+            class="px-4 py-2 text-sm text-slate-300 hover:text-white rounded transition-colors">Cancel</button>
+    <button id="prog-scan-submit" onclick="submitProgramScan('{{ program.id }}')"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">
+      Start Scan
+    </button>
+  </div>
+</dialog>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function toggleActive(programId, currentActive) {
+  const btn = document.getElementById('active-toggle');
+  try {
+    const r = await fetch('/api/programs/' + programId, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: !currentActive }),
+    });
+    if (r.ok) {
+      window.location.reload();
+    } else {
+      toast('Failed to update program', 'error');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  }
+}
+
+async function submitProgramScan(programId) {
+  const form = document.getElementById('prog-scan-form');
+  const btn = document.getElementById('prog-scan-submit');
+  const data = Object.fromEntries(new FormData(form));
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  try {
+    const r = await fetch('/api/scans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        program_id: programId,
+        scan_type: data.scan_type || 'full',
+        intensity: data.intensity || 'normal',
+      }),
+    });
+    if (r.ok) {
+      const resp = await r.json();
+      document.getElementById('run-scan-modal').close();
+      toast('Scan queued: ' + resp.scan_id, 'success');
+      setTimeout(() => window.location.href = '/scans/' + resp.scan_id, 800);
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Failed: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Start Scan';
+  }
+}
+</script>
+<style>
+.severity-critical { color: #ef4444; }
+.severity-high     { color: #f97316; }
+.severity-medium   { color: #eab308; }
+.severity-low      { color: #3b82f6; }
+.severity-info     { color: #94a3b8; }
+</style>
+{% endblock %}
+

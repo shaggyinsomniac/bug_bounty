@@ -1,13 +1,116 @@
 {% extends "_base.html" %}
+{% from "components/empty_state.html" import empty_state %}
+
 {% block title %}Assets{% endblock %}
+
 {% block content %}
-<div class="space-y-4">
-  <h1 class="text-2xl font-bold text-slate-100">Assets</h1>
-  <div class="bg-slate-800 border border-slate-700 rounded-lg p-8 text-center text-slate-400">
-    <div class="text-4xl mb-3">🖥️</div>
-    <h2 class="text-lg font-semibold text-slate-300 mb-2">Coming in next phase</h2>
-    <p class="text-sm">Full asset browser with filtering, fingerprint details, and scan history.</p>
+<div class="space-y-6">
+
+  <!-- Header -->
+  <div class="flex items-center gap-3">
+    <h1 class="text-2xl font-bold text-slate-100">Assets</h1>
+    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-700 text-slate-300">
+      {{ total }}
+    </span>
   </div>
+
+  <!-- Filter bar -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+    <div class="flex flex-wrap gap-4 items-end">
+
+      <!-- Program dropdown -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide" for="program-filter">Program</label>
+        <select id="program-filter" name="program_id"
+                class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">All programs</option>
+          {% for p in programs %}
+            <option value="{{ p.id }}" {% if filters.program_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Has findings toggle -->
+      <div class="flex flex-col gap-1 justify-end pb-1">
+        <label class="flex items-center gap-2 text-sm cursor-pointer select-none text-slate-300">
+          <input type="checkbox" id="has-findings" value="true"
+                 {% if filters.has_findings %}checked{% endif %} class="accent-blue-500">
+          Has findings
+        </label>
+      </div>
+
+      <!-- Has fingerprint toggle -->
+      <div class="flex flex-col gap-1 justify-end pb-1">
+        <label class="flex items-center gap-2 text-sm cursor-pointer select-none text-slate-300">
+          <input type="checkbox" id="has-fingerprint" value="true"
+                 {% if filters.has_fingerprint %}checked{% endif %} class="accent-blue-500">
+          Has fingerprint
+        </label>
+      </div>
+
+      <!-- Tech text input -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide" for="tech-filter">Tech</label>
+        <input id="tech-filter" type="text" value="{{ filters.tech }}"
+               placeholder="e.g. nginx"
+               class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm w-32
+                      focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+      </div>
+
+      <!-- Search -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide" for="search-filter">Search</label>
+        <input id="search-filter" type="search" value="{{ filters.search }}"
+               placeholder="host or title…"
+               class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm w-44
+                      focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+      </div>
+
+      <!-- Filter button -->
+      <div class="flex gap-2 items-end pb-0.5">
+        <button type="button" onclick="applyFilters()"
+                class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">
+          Filter
+        </button>
+        {% if filters.program_id or filters.has_findings or filters.has_fingerprint or filters.tech or filters.search %}
+          <a href="/assets"
+             class="px-4 py-1.5 text-slate-400 hover:text-white text-sm rounded transition-colors">
+            Clear
+          </a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Assets table -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden" id="assets-table">
+    {% include "assets/_table.html" %}
+  </div>
+
 </div>
 {% endblock %}
 
+{% block scripts %}
+<script>
+function applyFilters() {
+  const params = new URLSearchParams();
+  const prog = document.getElementById('program-filter').value;
+  if (prog) params.set('program_id', prog);
+  if (document.getElementById('has-findings').checked) params.set('has_findings', 'true');
+  if (document.getElementById('has-fingerprint').checked) params.set('has_fingerprint', 'true');
+  const tech = document.getElementById('tech-filter').value.trim();
+  if (tech) params.set('tech', tech);
+  const search = document.getElementById('search-filter').value.trim();
+  if (search) params.set('search', search);
+
+  const url = '/assets?' + params.toString();
+  htmx.ajax('GET', url, {
+    target: '#assets-table',
+    swap: 'innerHTML',
+    headers: { 'HX-Request': 'true' }
+  });
+  history.pushState(null, '', url);
+}
+</script>
+{% endblock %}

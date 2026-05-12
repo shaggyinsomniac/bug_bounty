@@ -251,8 +251,138 @@ async def scan_detail(
 # ---------------------------------------------------------------------------
 
 @router.get("/assets", response_class=HTMLResponse)
-async def assets_page(request: Request, _auth: PageAuthDep) -> Response:
-    return _tmpl(request, "assets/list.html", {})
+async def assets_page(
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+    program_id: str | None = Query(default=None),
+    has_findings: bool = Query(default=False),
+    has_fingerprint: bool = Query(default=False),
+    tech: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=25, ge=1, le=200),
+) -> Response:
+    """Assets list page."""
+    is_htmx = bool(request.headers.get("HX-Request"))
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if program_id:
+        clauses.append("a.program_id = ?")
+        params.append(program_id)
+    if search:
+        clauses.append("(a.host LIKE ? OR a.title LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    if has_findings:
+        clauses.append("EXISTS (SELECT 1 FROM findings f WHERE f.asset_id = a.id)")
+    if has_fingerprint:
+        clauses.append("EXISTS (SELECT 1 FROM fingerprints fp WHERE fp.asset_id = a.id)")
+    if tech:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM fingerprints fp WHERE fp.asset_id = a.id AND fp.tech = ?)"
+        )
+        params.append(tech)
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    count_params = list(params)
+    limit = per_page
+    offset = (page - 1) * per_page
+
+    async with get_conn(db_path) as conn:
+        cnt_cur = await conn.execute(
+            f"SELECT COUNT(*) FROM assets a {where}", count_params
+        )
+        cnt_row = await cnt_cur.fetchone()
+        total: int = cnt_row[0] if cnt_row else 0
+
+        params_q = list(count_params) + [limit, offset]
+        cur = await conn.execute(
+            f"SELECT a.* FROM assets a {where} ORDER BY a.created_at DESC LIMIT ? OFFSET ?",
+            params_q,
+        )
+        assets: list[dict[str, Any]] = []
+        for r in await cur.fetchall():
+            d: dict[str, Any] = {k: r[k] for k in r.keys()}
+            for field in ("tags", "seen_protocols"):
+                if isinstance(d.get(field), str):
+                    try:
+                        d[field] = json.loads(d[field])
+                    except (json.JSONDecodeError, ValueError):
+                        d[field] = []
+            assets.append(d)
+
+        pcur = await conn.execute("SELECT * FROM programs ORDER BY name")
+        programs = [_prog_row_p(r) for r in await pcur.fetchall()]
+
+    context: dict[str, Any] = {
+        "assets": assets,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "programs": programs,
+        "filters": {
+            "program_id": program_id or "",
+            "has_findings": has_findings,
+            "has_fingerprint": has_fingerprint,
+            "tech": tech or "",
+            "search": search or "",
+        },
+    }
+    template = "assets/_table.html" if is_htmx else "assets/list.html"
+    return _tmpl(request, template, context)
+
+
+@router.get("/assets/{asset_id}", response_class=HTMLResponse)
+async def asset_detail(
+    asset_id: str,
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+) -> Response:
+    """Asset detail page."""
+    async with get_conn(db_path) as conn:
+        cur = await conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,))
+        row = await cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        asset: dict[str, Any] = {k: row[k] for k in row.keys()}
+        for field in ("tags", "seen_protocols"):
+            if isinstance(asset.get(field), str):
+                try:
+                    asset[field] = json.loads(asset[field])
+                except (json.JSONDecodeError, ValueError):
+                    asset[field] = []
+
+        fp_cur = await conn.execute(
+            "SELECT id, tech, version, category, confidence, created_at"
+            " FROM fingerprints WHERE asset_id = ? ORDER BY confidence DESC",
+            (asset_id,),
+        )
+        fingerprints: list[dict[str, Any]] = [
+            {k: r[k] for k in r.keys()} for r in await fp_cur.fetchall()
+        ]
+
+        cnt_cur = await conn.execute(
+            "SELECT COUNT(*) FROM findings WHERE asset_id = ?", (asset_id,)
+        )
+        cnt_row = await cnt_cur.fetchone()
+        findings_count: int = cnt_row[0] if cnt_row else 0
+
+        find_cur = await conn.execute(
+            "SELECT * FROM findings WHERE asset_id = ? ORDER BY severity DESC LIMIT 10",
+            (asset_id,),
+        )
+        findings = [_finding_row_p(r) for r in await find_cur.fetchall()]
+
+    return _tmpl(request, "assets/detail.html", {
+        "asset": asset,
+        "fingerprints": fingerprints,
+        "findings_count": findings_count,
+        "findings": findings,
+    })
 
 
 @router.get("/findings", response_class=HTMLResponse)
@@ -435,13 +565,219 @@ async def _finding_detail_response(
 
 
 @router.get("/programs", response_class=HTMLResponse)
-async def programs_page(request: Request, _auth: PageAuthDep) -> Response:
-    return _tmpl(request, "programs/list.html", {})
+async def programs_page(
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+    platform: str | None = Query(default=None),
+    active_only: bool = Query(default=False),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=25, ge=1, le=200),
+) -> Response:
+    """Programs list page."""
+    is_htmx = bool(request.headers.get("HX-Request"))
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if platform:
+        clauses.append("platform = ?")
+        params.append(platform)
+    if active_only:
+        clauses.append("active = 1")
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    count_params = list(params)
+    limit = per_page
+    offset = (page - 1) * per_page
+
+    async with get_conn(db_path) as conn:
+        cnt_cur = await conn.execute(
+            f"SELECT COUNT(*) FROM programs {where}", count_params
+        )
+        cnt_row = await cnt_cur.fetchone()
+        total: int = cnt_row[0] if cnt_row else 0
+
+        params_q = list(count_params) + [limit, offset]
+        cur = await conn.execute(
+            f"SELECT * FROM programs {where} ORDER BY name LIMIT ? OFFSET ?",
+            params_q,
+        )
+        programs_raw = [_prog_row_p(r) for r in await cur.fetchall()]
+
+        # Enrich with asset/finding counts
+        programs: list[dict[str, Any]] = []
+        for p in programs_raw:
+            pid = p["id"]
+            a_cur = await conn.execute(
+                "SELECT COUNT(*) FROM assets WHERE program_id = ?", (pid,)
+            )
+            a_row = await a_cur.fetchone()
+            p["asset_count"] = a_row[0] if a_row else 0
+
+            f_cur = await conn.execute(
+                "SELECT COUNT(*) FROM findings WHERE program_id = ?", (pid,)
+            )
+            f_row = await f_cur.fetchone()
+            p["finding_count"] = f_row[0] if f_row else 0
+            programs.append(p)
+
+    context: dict[str, Any] = {
+        "programs": programs,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "filters": {
+            "platform": platform or "",
+            "active_only": active_only,
+        },
+    }
+    template = "programs/_table.html" if is_htmx else "programs/list.html"
+    return _tmpl(request, template, context)
+
+
+@router.get("/programs/{program_id}", response_class=HTMLResponse)
+async def program_detail(
+    program_id: str,
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+) -> Response:
+    """Program detail page."""
+    async with get_conn(db_path) as conn:
+        cur = await conn.execute("SELECT * FROM programs WHERE id = ?", (program_id,))
+        row = await cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Program not found")
+
+        program = _prog_row_p(row)
+
+        t_cur = await conn.execute(
+            "SELECT * FROM targets WHERE program_id = ? ORDER BY scope_type, asset_type",
+            (program_id,),
+        )
+        program["targets"] = [{k: r[k] for k in r.keys()} for r in await t_cur.fetchall()]
+
+        a_cur = await conn.execute(
+            "SELECT COUNT(*) FROM assets WHERE program_id = ?", (program_id,)
+        )
+        a_row = await a_cur.fetchone()
+        program["asset_count"] = a_row[0] if a_row else 0
+
+        f_cur = await conn.execute(
+            "SELECT COUNT(*) FROM findings WHERE program_id = ?", (program_id,)
+        )
+        f_row = await f_cur.fetchone()
+        program["finding_count"] = f_row[0] if f_row else 0
+
+        sc_cur = await conn.execute(
+            "SELECT COUNT(*) FROM scans WHERE program_id = ?", (program_id,)
+        )
+        sc_row = await sc_cur.fetchone()
+        program["scan_count"] = sc_row[0] if sc_row else 0
+
+        sev_cur = await conn.execute(
+            "SELECT severity_label, COUNT(*) FROM findings WHERE program_id = ? GROUP BY severity_label",
+            (program_id,),
+        )
+        findings_by_severity: dict[str, int] = {}
+        for r in await sev_cur.fetchall():
+            findings_by_severity[r[0]] = r[1]
+
+        scan_cur = await conn.execute(
+            "SELECT * FROM scans WHERE program_id = ? ORDER BY created_at DESC LIMIT 10",
+            (program_id,),
+        )
+        recent_scans = [_scan_row_p(r) for r in await scan_cur.fetchall()]
+
+        find_cur = await conn.execute(
+            "SELECT * FROM findings WHERE program_id = ? ORDER BY severity DESC, created_at DESC LIMIT 10",
+            (program_id,),
+        )
+        recent_findings = [_finding_row_p(r) for r in await find_cur.fetchall()]
+
+    return _tmpl(request, "programs/detail.html", {
+        "program": program,
+        "findings_by_severity": findings_by_severity,
+        "recent_scans": recent_scans,
+        "recent_findings": recent_findings,
+    })
 
 
 @router.get("/secrets", response_class=HTMLResponse)
-async def secrets_page(request: Request, _auth: PageAuthDep) -> Response:
-    return _tmpl(request, "secrets/list.html", {})
+async def secrets_page(
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+    status: str | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=25, ge=1, le=200),
+) -> Response:
+    """Secrets list page."""
+    is_htmx = bool(request.headers.get("HX-Request"))
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if provider:
+        clauses.append("provider = ?")
+        params.append(provider)
+    if search:
+        clauses.append("secret_preview LIKE ?")
+        params.append(f"%{search}%")
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    count_params = list(params)
+    limit = per_page
+    offset = (page - 1) * per_page
+
+    async with get_conn(db_path) as conn:
+        cnt_cur = await conn.execute(
+            f"SELECT COUNT(*) FROM secrets_validations {where}", count_params
+        )
+        cnt_row = await cnt_cur.fetchone()
+        total: int = cnt_row[0] if cnt_row else 0
+
+        params_q = list(count_params) + [limit, offset]
+        cur = await conn.execute(
+            f"SELECT * FROM secrets_validations {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            params_q,
+        )
+        secrets: list[dict[str, Any]] = []
+        for r in await cur.fetchall():
+            d: dict[str, Any] = {k: r[k] for k in r.keys()}
+            if isinstance(d.get("scope"), str):
+                try:
+                    d["scope"] = json.loads(d["scope"])
+                except (json.JSONDecodeError, ValueError):
+                    d["scope"] = None
+            secrets.append(d)
+
+        # Distinct providers for dropdown
+        prov_cur = await conn.execute(
+            "SELECT DISTINCT provider FROM secrets_validations ORDER BY provider"
+        )
+        providers: list[str] = [str(r[0]) for r in await prov_cur.fetchall()]
+
+    context: dict[str, Any] = {
+        "secrets": secrets,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "providers": providers,
+        "filters": {
+            "status": status or "",
+            "provider": provider or "",
+            "search": search or "",
+        },
+    }
+    template = "secrets/_table.html" if is_htmx else "secrets/list.html"
+    return _tmpl(request, template, context)
 
 
 @router.get("/reports", response_class=HTMLResponse)

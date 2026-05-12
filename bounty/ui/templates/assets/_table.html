@@ -1,0 +1,86 @@
+{% from "components/empty_state.html" import empty_state %}
+
+{% if assets %}
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-xs text-slate-400 uppercase border-b border-slate-700 bg-slate-850">
+        <th class="px-3 py-2 text-left">Host</th>
+        <th class="px-3 py-2 text-left w-16">Port</th>
+        <th class="px-3 py-2 text-left w-20">HTTP</th>
+        <th class="px-3 py-2 text-left">Title</th>
+        <th class="px-3 py-2 text-left">Server</th>
+        <th class="px-3 py-2 text-left w-20">CDN</th>
+        <th class="px-3 py-2 text-left w-36">Created</th>
+      </tr>
+    </thead>
+    <tbody id="assets-tbody">
+      {% for a in assets %}
+        <tr id="asset-{{ a.id }}"
+            class="border-b border-slate-700 hover:bg-slate-750 cursor-pointer"
+            onclick="window.location='/assets/{{ a.id }}'">
+          <td class="px-3 py-2 font-mono text-xs text-blue-400 max-w-xs">
+            <a href="/assets/{{ a.id }}" class="hover:underline" onclick="event.stopPropagation()">
+              {{ a.host }}
+            </a>
+          </td>
+          <td class="px-3 py-2 text-xs text-slate-400">{{ a.port if a.port else '' }}</td>
+          <td class="px-3 py-2 text-xs">
+            {% if a.http_status %}
+              {% set sc = a.http_status | string %}
+              {% if sc.startswith('2') %}
+                <span class="text-green-400">{{ sc }}</span>
+              {% elif sc.startswith('3') %}
+                <span class="text-yellow-400">{{ sc }}</span>
+              {% elif sc.startswith('4') %}
+                <span class="text-orange-400">{{ sc }}</span>
+              {% elif sc.startswith('5') %}
+                <span class="text-red-400">{{ sc }}</span>
+              {% else %}
+                <span class="text-slate-400">{{ sc }}</span>
+              {% endif %}
+            {% endif %}
+          </td>
+          <td class="px-3 py-2 text-sm text-slate-200 max-w-xs">
+            <div class="truncate" title="{{ a.title if a.title else '' }}">
+              {{ (a.title if a.title else '')[:60] }}
+            </div>
+          </td>
+          <td class="px-3 py-2 text-xs text-slate-400 max-w-xs">
+            <div class="truncate">{{ a.server if a.server else '' }}</div>
+          </td>
+          <td class="px-3 py-2 text-xs text-slate-400">{{ a.cdn if a.cdn else '' }}</td>
+          <td class="px-3 py-2 text-xs text-slate-500">
+            {{ (a.created_at if a.created_at else '') | string | truncate(16, True, '') }}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if total > per_page %}
+    <div class="flex items-center justify-between px-4 py-3 border-t border-slate-700 text-sm text-slate-400">
+      <span>Showing {{ (page - 1) * per_page + 1 }}–{{ [page * per_page, total] | min }} of {{ total }}</span>
+      <div class="flex gap-2">
+        {% if page > 1 %}
+          <a href="/assets?page={{ page - 1 }}{% if filters.program_id %}&program_id={{ filters.program_id }}{% endif %}{% if filters.has_findings %}&has_findings=true{% endif %}{% if filters.has_fingerprint %}&has_fingerprint=true{% endif %}{% if filters.tech %}&tech={{ filters.tech }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}"
+             hx-get="/assets?page={{ page - 1 }}{% if filters.program_id %}&program_id={{ filters.program_id }}{% endif %}{% if filters.has_findings %}&has_findings=true{% endif %}{% if filters.has_fingerprint %}&has_fingerprint=true{% endif %}{% if filters.tech %}&tech={{ filters.tech }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}"
+             hx-target="#assets-table"
+             hx-push-url="true"
+             class="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded transition-colors">← Prev</a>
+        {% endif %}
+        {% if page * per_page < total %}
+          <a href="/assets?page={{ page + 1 }}{% if filters.program_id %}&program_id={{ filters.program_id }}{% endif %}{% if filters.has_findings %}&has_findings=true{% endif %}{% if filters.has_fingerprint %}&has_fingerprint=true{% endif %}{% if filters.tech %}&tech={{ filters.tech }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}"
+             hx-get="/assets?page={{ page + 1 }}{% if filters.program_id %}&program_id={{ filters.program_id }}{% endif %}{% if filters.has_findings %}&has_findings=true{% endif %}{% if filters.has_fingerprint %}&has_fingerprint=true{% endif %}{% if filters.tech %}&tech={{ filters.tech }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}"
+             hx-target="#assets-table"
+             hx-push-url="true"
+             class="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded transition-colors">Next →</a>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+{% else %}
+  {{ empty_state('🖥️', 'No assets yet',
+     'Assets are discovered automatically during scans against your targets.',
+     '', '') }}
+{% endif %}
+

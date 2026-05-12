@@ -1,0 +1,176 @@
+{% extends "_base.html" %}
+{% from "components/finding_row.html" import finding_row %}
+{% from "components/empty_state.html" import empty_state %}
+
+{% block title %}{{ asset.host }} — Asset{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Back link + Header -->
+  <div class="space-y-2">
+    <a href="/assets" class="text-sm text-slate-400 hover:text-slate-200 transition-colors">
+      ← Back to Assets
+    </a>
+    <div class="flex items-center gap-3 flex-wrap">
+      <h1 class="text-2xl font-bold text-slate-100 font-mono">{{ asset.host }}</h1>
+      {% if asset.status %}
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+               {% if asset.status == 'active' %}bg-green-900 text-green-300
+               {% elif asset.status == 'inactive' %}bg-slate-700 text-slate-400
+               {% else %}bg-slate-700 text-slate-300{% endif %}">
+          {{ asset.status }}
+        </span>
+      {% endif %}
+      {% if asset.http_status %}
+        {% set sc = asset.http_status | string %}
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium font-mono
+               {% if sc.startswith('2') %}bg-green-900 text-green-300
+               {% elif sc.startswith('3') %}bg-yellow-900 text-yellow-300
+               {% elif sc.startswith('4') %}bg-orange-900 text-orange-300
+               {% elif sc.startswith('5') %}bg-red-900 text-red-300
+               {% else %}bg-slate-700 text-slate-300{% endif %}">
+          HTTP {{ sc }}
+        </span>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Metadata grid -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-6">
+    <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-4">Details</h2>
+    <dl class="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
+      <div>
+        <dt class="text-xs text-slate-500 uppercase">Program</dt>
+        <dd class="text-slate-200 mt-0.5">
+          {% if asset.program_id %}
+            <a href="/programs/{{ asset.program_id }}" class="text-blue-400 hover:underline">
+              {{ asset.program_id }}
+            </a>
+          {% else %}
+            <span class="text-slate-500">—</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500 uppercase">IP</dt>
+        <dd class="text-slate-200 font-mono mt-0.5">{{ asset.ip if asset.ip else '—' }}</dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500 uppercase">Scheme</dt>
+        <dd class="text-slate-200 mt-0.5">{{ asset.scheme if asset.scheme else '—' }}</dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500 uppercase">Port</dt>
+        <dd class="text-slate-200 font-mono mt-0.5">{{ asset.port if asset.port else '—' }}</dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500 uppercase">Server</dt>
+        <dd class="text-slate-200 mt-0.5 truncate" title="{{ asset.server if asset.server else '' }}">
+          {{ asset.server if asset.server else '—' }}
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500 uppercase">CDN</dt>
+        <dd class="text-slate-200 mt-0.5">{{ asset.cdn if asset.cdn else '—' }}</dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500 uppercase">WAF</dt>
+        <dd class="text-slate-200 mt-0.5">{{ asset.waf if asset.waf else '—' }}</dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500 uppercase">Created</dt>
+        <dd class="text-slate-200 mt-0.5">
+          {{ (asset.created_at if asset.created_at else '') | string | truncate(19, True, '') }}
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500 uppercase">URL</dt>
+        <dd class="text-slate-200 mt-0.5 truncate">
+          {% if asset.url %}
+            <a href="{{ asset.url }}" target="_blank" rel="noopener"
+               class="text-blue-400 hover:underline text-xs font-mono">{{ asset.url[:60] }}</a>
+          {% else %}
+            <span class="text-slate-500">—</span>
+          {% endif %}
+        </dd>
+      </div>
+    </dl>
+  </div>
+
+  <!-- Tags -->
+  {% if asset.tags %}
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-3">Tags</h2>
+      <div class="flex flex-wrap gap-2">
+        {% for tag in asset.tags %}
+          <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-700 text-slate-300">
+            {{ tag }}
+          </span>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+
+  <!-- Fingerprints -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+    <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-3">
+      Fingerprints
+      <span class="ml-2 text-xs font-normal text-slate-500">({{ fingerprints | length }})</span>
+    </h2>
+    {% if fingerprints %}
+      <div class="flex flex-wrap gap-2">
+        {% for fp in fingerprints %}
+          <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-slate-700 text-slate-200"
+                title="{{ fp.category if fp.category else '' }} — confidence {{ fp.confidence if fp.confidence else '?' }}%">
+            {{ fp.tech }}
+            {% if fp.version %}
+              <span class="text-slate-400">{{ fp.version }}</span>
+            {% endif %}
+          </span>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="text-sm text-slate-500">No fingerprints detected for this asset.</p>
+    {% endif %}
+  </div>
+
+  <!-- Recent findings -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">
+        Recent Findings
+        <span class="ml-2 text-xs font-normal text-slate-500">({{ findings_count }} total)</span>
+      </h2>
+      {% if findings_count > 0 %}
+        <a href="/findings?search={{ asset.host }}" class="text-xs text-blue-400 hover:underline">
+          View all →
+        </a>
+      {% endif %}
+    </div>
+    {% if findings %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-400 uppercase border-b border-slate-700">
+            <th class="px-3 py-2 text-left w-24">Severity</th>
+            <th class="px-3 py-2 text-left w-28">Status</th>
+            <th class="px-3 py-2 text-left">Title</th>
+            <th class="px-3 py-2 text-left">Category</th>
+            <th class="px-3 py-2 text-center w-20">Valid</th>
+            <th class="px-3 py-2 text-left w-36">Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in findings %}
+            {{ finding_row(f) }}
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      {{ empty_state('🐛', 'No findings for this asset', '', '', '') }}
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
+
