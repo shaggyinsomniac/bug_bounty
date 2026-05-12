@@ -1,0 +1,18 @@
+{% extends "_base.html" %}
+{% from "components/severity_badge.html" import severity_badge %}
+{% from "components/status_pill.html" import status_pill %}
+
+{% block title %}{{ finding.title[:60] }} — Findings{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+{% endblock %}
+
+{% block content %}
+{% include "findings/_detail_content.html" %}
+{% endblock %}
+
+{% block scripts %}
+{% include "findings/_detail_scripts.html" %}
+{% endblock %}
+

@@ -204,6 +204,122 @@ function htmxAuth() {
   });
 })();
 
+/* ------------------------------------------------------------------ clipboard */
+/**
+ * copyToClipboard(text, btnElement)
+ * Copies text to clipboard and shows a transient ✓ on the button.
+ */
+async function copyToClipboard(text, btnEl) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const orig = btnEl.textContent;
+    btnEl.textContent = '✓ Copied';
+    btnEl.disabled = true;
+    setTimeout(() => { btnEl.textContent = orig; btnEl.disabled = false; }, 2000);
+  } catch (e) {
+    toast('Copy failed: ' + e.message, 'error');
+  }
+}
+
+/* ------------------------------------------------------------------ markdown */
+/**
+ * renderMarkdown(el)
+ * Replaces el.innerHTML with marked.parse(el.textContent).
+ * Requires marked.js CDN — included via {% block head %} on findings pages.
+ */
+function renderMarkdown(el) {
+  if (!el || !el.textContent.trim()) return;
+  try {
+    if (typeof marked !== 'undefined') {
+      el.innerHTML = marked.parse(el.textContent);
+    }
+  } catch (_) {}
+}
+
+/* ------------------------------------------------------------------ kanban DnD */
+/**
+ * kanbanDnD()
+ * Initialises HTML5 drag-and-drop on .kanban-card / .kanban-column elements.
+ * On drop, PATCHes /api/findings/{id}/status with the new status.
+ * Reverts card position on failure.
+ */
+function kanbanDnD() {
+  let draggedCard = null;
+  let sourceCol = null;
+
+  function bindCard(card) {
+    card.addEventListener('dragstart', (e) => {
+      draggedCard = card;
+      sourceCol = card.closest('.kanban-column');
+      card.classList.add('opacity-50');
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('opacity-50');
+    });
+  }
+
+  document.querySelectorAll('.kanban-card').forEach(bindCard);
+
+  document.querySelectorAll('.kanban-column').forEach(col => {
+    col.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      col.classList.add('ring-2', 'ring-blue-500');
+    });
+    col.addEventListener('dragleave', () => {
+      col.classList.remove('ring-2', 'ring-blue-500');
+    });
+    col.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      col.classList.remove('ring-2', 'ring-blue-500');
+      if (!draggedCard) return;
+
+      const findingId = draggedCard.dataset.findingId;
+      const newStatus = col.dataset.status;
+      const prevCol = sourceCol;
+
+      // Optimistic UI: move card
+      const cards = col.querySelector('.kanban-cards');
+      if (cards) cards.prepend(draggedCard);
+
+      // Update count badges
+      if (prevCol && prevCol !== col) {
+        const ob = prevCol.querySelector('.kanban-count');
+        const nb = col.querySelector('.kanban-count');
+        if (ob) ob.textContent = String(Math.max(0, parseInt(ob.textContent || '0') - 1));
+        if (nb) nb.textContent = String(parseInt(nb.textContent || '0') + 1);
+      }
+
+      try {
+        const r = await fetch('/api/findings/' + findingId + '/status', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: newStatus }),
+        });
+        if (!r.ok) {
+          // Revert
+          if (prevCol) {
+            const pc = prevCol.querySelector('.kanban-cards');
+            if (pc) pc.prepend(draggedCard);
+            const ob = prevCol.querySelector('.kanban-count');
+            const nb = col.querySelector('.kanban-count');
+            if (ob) ob.textContent = String(parseInt(ob.textContent || '0') + 1);
+            if (nb) nb.textContent = String(Math.max(0, parseInt(nb.textContent || '0') - 1));
+          }
+          toast('Failed to update status', 'error');
+        } else {
+          toast('Moved to ' + newStatus, 'success');
+        }
+      } catch (err) {
+        toast('Network error', 'error');
+      }
+      draggedCard = null;
+      sourceCol = null;
+    });
+  });
+}
+
 /* ------------------------------------------------------------------ init */
 document.addEventListener('DOMContentLoaded', () => {
   htmxAuth();

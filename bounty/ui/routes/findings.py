@@ -187,6 +187,39 @@ async def get_finding(
     return JSONResponse(finding)
 
 
+_KanbanStatus = Literal[
+    "new", "triaged", "reported", "accepted",
+    "dismissed", "duplicate", "wont_fix", "resolved",
+]
+
+
+class FindingStatusPatch(BaseModel):
+    """Thin body for the kanban DnD status update."""
+    status: _KanbanStatus
+
+
+@router.patch("/{finding_id}/status")
+async def patch_finding_status(
+    finding_id: str,
+    body: FindingStatusPatch,
+    db_path: DbPathDep,
+    _auth: ApiAuthDep,
+) -> JSONResponse:
+    """Update finding status — used by kanban drag-and-drop."""
+    ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    async with get_conn(db_path) as conn:
+        cur = await conn.execute(
+            "UPDATE findings SET status = ?, updated_at = ? WHERE id = ?",
+            (body.status, ts, finding_id),
+        )
+        await conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        row_cur = await conn.execute("SELECT * FROM findings WHERE id = ?", (finding_id,))
+        updated = await row_cur.fetchone()
+    return JSONResponse(_finding_row(updated))  # type: ignore[arg-type]
+
+
 class FindingPatch(BaseModel):
     status: FindingStatus | None = None
     tags: list[str] | None = None

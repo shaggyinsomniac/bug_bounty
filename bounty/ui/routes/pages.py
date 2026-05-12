@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 import aiosqlite
@@ -259,6 +260,7 @@ async def findings_page(
     request: Request,
     db_path: DbPathDep,
     _auth: PageAuthDep,
+    view: str | None = Query(default=None),
     severity: str | None = Query(default=None),
     status: str | None = Query(default=None),
     category: str | None = Query(default=None),
@@ -268,6 +270,37 @@ async def findings_page(
     per_page: int = Query(default=25, ge=1, le=200),
 ) -> Response:
     """Findings list page with filtering, pagination, and HTMX partial support."""
+    is_htmx = bool(request.headers.get("HX-Request"))
+
+    # ---------------------------------------------------------------- kanban
+    if view == "kanban":
+        status_names = [
+            "new", "triaged", "reported", "accepted",
+            "dismissed", "duplicate", "wont_fix",
+        ]
+        kanban_columns: dict[str, list[dict[str, Any]]] = {s: [] for s in status_names}
+        kcount = 0
+        async with get_conn(db_path) as conn:
+            kcur = await conn.execute(
+                "SELECT * FROM findings ORDER BY severity DESC, created_at DESC LIMIT 500"
+            )
+            for kr in await kcur.fetchall():
+                kf = _finding_row_p(kr)
+                ks = str(kf.get("status", "new"))
+                if ks in kanban_columns:
+                    kanban_columns[ks].append(kf)
+                else:
+                    kanban_columns["new"].append(kf)
+                kcount += 1
+        kctx: dict[str, Any] = {
+            "kanban_columns": kanban_columns,
+            "status_names": status_names,
+            "total": kcount,
+        }
+        ktmpl = "findings/_kanban.html" if is_htmx else "findings/kanban.html"
+        return _tmpl(request, ktmpl, kctx)
+
+    # ---------------------------------------------------------------- table
     severities = [s.strip() for s in severity.split(",")] if severity else []
 
     clauses: list[str] = []
@@ -321,9 +354,84 @@ async def findings_page(
         "severities_checked": severities,
     }
 
-    is_htmx = bool(request.headers.get("HX-Request"))
     template = "findings/_table.html" if is_htmx else "findings/list.html"
     return _tmpl(request, template, context)
+
+
+@router.get("/findings/{finding_id}/drawer", response_class=HTMLResponse)
+async def finding_drawer(
+    finding_id: str,
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+) -> Response:
+    """Drawer-style partial for finding detail (always returns partial fragment)."""
+    return await _finding_detail_response(finding_id, request, db_path, partial=True)
+
+
+@router.get("/findings/{finding_id}", response_class=HTMLResponse)
+async def finding_detail(
+    finding_id: str,
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+) -> Response:
+    """Finding detail page — full page or partial depending on HX-Request."""
+    is_htmx = bool(request.headers.get("HX-Request"))
+    return await _finding_detail_response(finding_id, request, db_path, partial=is_htmx)
+
+
+async def _finding_detail_response(
+    finding_id: str,
+    request: Request,
+    db_path: "Path",
+    partial: bool,
+) -> Response:
+    """Shared helper that fetches finding data and renders the appropriate template."""
+    async with get_conn(db_path) as conn:
+        cur = await conn.execute("SELECT * FROM findings WHERE id = ?", (finding_id,))
+        row = await cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        finding = _finding_row_p(row)
+
+        ev_cur = await conn.execute(
+            "SELECT * FROM evidence_packages WHERE finding_id = ? ORDER BY captured_at",
+            (finding_id,),
+        )
+        evidence = [{k: r[k] for k in r.keys()} for r in await ev_cur.fetchall()]
+
+        sv_cur = await conn.execute(
+            "SELECT * FROM secrets_validations WHERE finding_id = ? ORDER BY created_at",
+            (finding_id,),
+        )
+        secrets: list[dict[str, Any]] = []
+        for r in await sv_cur.fetchall():
+            d: dict[str, Any] = {k: r[k] for k in r.keys()}
+            if isinstance(d.get("scope"), str):
+                try:
+                    d["scope"] = json.loads(d["scope"])
+                except (json.JSONDecodeError, ValueError):
+                    d["scope"] = None
+            secrets.append(d)
+
+        asset: dict[str, Any] | None = None
+        if finding.get("asset_id"):
+            a_cur = await conn.execute(
+                "SELECT * FROM assets WHERE id = ?", (finding["asset_id"],)
+            )
+            a_row = await a_cur.fetchone()
+            if a_row:
+                asset = {k: a_row[k] for k in a_row.keys()}
+
+    ctx: dict[str, Any] = {
+        "finding": finding,
+        "evidence": evidence,
+        "secrets": secrets,
+        "asset": asset,
+    }
+    tmpl = "findings/_detail_partial.html" if partial else "findings/detail.html"
+    return _tmpl(request, tmpl, ctx)
 
 
 @router.get("/programs", response_class=HTMLResponse)

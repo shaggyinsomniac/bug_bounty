@@ -1,0 +1,31 @@
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  // Render markdown sections
+  document.querySelectorAll('.md-content').forEach(renderMarkdown);
+
+  // Status change → PATCH /api/findings/{id}/status
+  const statusEl = document.getElementById('status-select');
+  if (statusEl) {
+    const origStatus = statusEl.value;
+    statusEl.addEventListener('change', async (e) => {
+      try {
+        const r = await fetch('/api/findings/{{ finding.id }}/status', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: e.target.value }),
+        });
+        if (r.ok) {
+          toast('Status updated to ' + e.target.value, 'success');
+        } else {
+          toast('Failed to update status', 'error');
+          statusEl.value = origStatus;
+        }
+      } catch (err) {
+        toast('Network error', 'error');
+        statusEl.value = origStatus;
+      }
+    });
+  }
+});
+</script>
+

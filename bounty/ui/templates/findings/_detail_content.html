@@ -1,0 +1,265 @@
+{% from "components/severity_badge.html" import severity_badge %}
+{% from "components/status_pill.html" import status_pill %}
+<div class="space-y-6" id="finding-detail-{{ finding.id }}">
+
+  <!-- ============================================================ HEADER CARD -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-5">
+    <!-- Breadcrumb -->
+    <nav class="text-sm text-slate-400 flex items-center gap-2 mb-4">
+      <a href="/findings" class="hover:text-white transition-colors">← Back to Findings</a>
+    </nav>
+
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div class="flex-1 space-y-2 min-w-0">
+        <div class="flex items-center gap-3 flex-wrap">
+          {{ severity_badge(finding.severity_label | default('info')) }}
+          {% if finding.validated %}
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-green-900/50 text-green-400 text-xs rounded border border-green-700/50">
+              ✓ Validated
+            </span>
+          {% endif %}
+        </div>
+        <h1 class="text-xl font-bold text-slate-100 break-words">{{ finding.title }}</h1>
+        <p class="text-xs font-mono text-slate-500">{{ finding.dedup_key }}</p>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <label class="text-xs text-slate-400 uppercase tracking-wide sr-only" for="status-select">Status</label>
+        <select id="status-select"
+                class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-blue-500">
+          {% for s in ['new', 'triaged', 'reported', 'accepted', 'dismissed', 'duplicate', 'wont_fix', 'resolved'] %}
+            <option value="{{ s }}" {% if finding.status == s %}selected{% endif %}>
+              {{ s | replace('_', ' ') | title }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <!-- Meta grid -->
+    <div class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+      <div class="space-y-0.5">
+        <div class="text-slate-500 uppercase">Category</div>
+        <div class="text-slate-300 font-medium">{{ finding.category | default('—') }}</div>
+      </div>
+      <div class="space-y-0.5">
+        <div class="text-slate-500 uppercase">Severity</div>
+        <div class="text-slate-300 font-medium">{{ finding.severity }} / 1000</div>
+      </div>
+      <div class="space-y-0.5">
+        <div class="text-slate-500 uppercase">Created</div>
+        <div class="text-slate-300 font-mono">{{ finding.created_at | string | truncate(16, True, '') }}</div>
+      </div>
+      <div class="space-y-0.5">
+        <div class="text-slate-500 uppercase">Updated</div>
+        <div class="text-slate-300 font-mono">{{ finding.updated_at | string | truncate(16, True, '') }}</div>
+      </div>
+    </div>
+
+    {% if finding.url %}
+    <div class="mt-3 text-sm">
+      <span class="text-slate-500 text-xs uppercase">URL</span>
+      <div class="font-mono text-blue-400 break-all text-xs mt-0.5">
+        <a href="{{ finding.url }}" target="_blank" rel="noopener" class="hover:underline">{{ finding.url }}</a>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if finding.tags and finding.tags | length > 0 %}
+    <div class="mt-3 flex flex-wrap gap-2">
+      {% for tag in finding.tags %}
+        <span class="px-2 py-0.5 bg-slate-700 text-slate-300 text-xs rounded-full border border-slate-600">{{ tag }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ============================================================ ASSET INFO -->
+  {% if asset %}
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+    <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wide mb-3">Asset</h2>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+      <div>
+        <div class="text-slate-500 uppercase mb-0.5">Host</div>
+        <div class="text-slate-200 font-mono">{{ asset.host | default('—') }}</div>
+      </div>
+      <div>
+        <div class="text-slate-500 uppercase mb-0.5">IP</div>
+        <div class="text-slate-200 font-mono">{{ asset.ip | default('—') }}</div>
+      </div>
+      <div>
+        <div class="text-slate-500 uppercase mb-0.5">Status</div>
+        <div class="text-slate-200">{{ asset.http_status | default('—') }}</div>
+      </div>
+      {% if asset.server %}
+      <div>
+        <div class="text-slate-500 uppercase mb-0.5">Server</div>
+        <div class="text-slate-200">{{ asset.server }}</div>
+      </div>
+      {% endif %}
+      {% if asset.waf %}
+      <div>
+        <div class="text-slate-500 uppercase mb-0.5">WAF</div>
+        <div class="text-slate-200">{{ asset.waf }}</div>
+      </div>
+      {% endif %}
+      {% if asset.cdn %}
+      <div>
+        <div class="text-slate-500 uppercase mb-0.5">CDN</div>
+        <div class="text-slate-200">{{ asset.cdn }}</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ============================================================ DESCRIPTION -->
+  {% if finding.description %}
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+    <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wide mb-3">Description</h2>
+    <div class="prose prose-invert prose-sm max-w-none text-slate-300 md-content">{{ finding.description }}</div>
+  </div>
+  {% endif %}
+
+  <!-- ============================================================ REMEDIATION -->
+  {% if finding.remediation %}
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+    <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wide mb-3">Remediation</h2>
+    <div class="prose prose-invert prose-sm max-w-none text-slate-300 md-content">{{ finding.remediation }}</div>
+  </div>
+  {% endif %}
+
+  <!-- ============================================================ EVIDENCE -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-4" id="evidence-section">
+    <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wide mb-3">
+      Evidence
+      <span class="ml-2 px-1.5 py-0.5 bg-slate-700 text-slate-400 text-xs rounded">{{ evidence | length }}</span>
+    </h2>
+    {% if evidence %}
+      <div class="space-y-3">
+        {% for ev in evidence %}
+        <div x-data="{ open: {{ 'true' if loop.first else 'false' }} }"
+             class="border border-slate-700 rounded-lg overflow-hidden">
+          <button @click="open = !open"
+                  class="w-full flex items-center justify-between px-4 py-3 bg-slate-750 hover:bg-slate-700 text-left transition-colors">
+            <span class="flex items-center gap-3">
+              {% if ev.response_status %}
+                <span class="px-2 py-0.5 rounded text-xs font-bold font-mono
+                             {% if ev.response_status < 300 %}bg-green-900/60 text-green-400
+                             {% elif ev.response_status < 400 %}bg-yellow-900/60 text-yellow-400
+                             {% else %}bg-red-900/60 text-red-400{% endif %}">
+                  {{ ev.response_status }}
+                </span>
+              {% endif %}
+              <span class="text-sm text-slate-300">Evidence #{{ loop.index }}</span>
+              {% if ev.captured_at %}
+                <span class="text-xs text-slate-500">{{ ev.captured_at | string | truncate(16, True, '') }}</span>
+              {% endif %}
+            </span>
+            <span class="text-slate-400 text-xs" x-text="open ? '▲ Collapse' : '▼ Expand'"></span>
+          </button>
+
+          <div x-show="open" x-transition>
+            <div class="p-4 space-y-4 border-t border-slate-700">
+
+              {% if ev.curl_cmd %}
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-xs text-slate-500 uppercase">cURL Command</span>
+                  <button onclick="copyToClipboard({{ ev.curl_cmd | tojson }}, this)"
+                          class="text-xs px-2 py-0.5 bg-slate-700 hover:bg-slate-600 text-slate-300
+                                 rounded border border-slate-600 transition-colors">
+                    Copy
+                  </button>
+                </div>
+                <pre class="bg-slate-900 rounded p-3 text-xs text-green-400 font-mono overflow-x-auto whitespace-pre-wrap break-all curl-cmd">{{ ev.curl_cmd }}</pre>
+              </div>
+              {% endif %}
+
+              {% if ev.request_raw %}
+              <div>
+                <div class="text-xs text-slate-500 uppercase mb-1">Request</div>
+                <pre class="bg-slate-900 rounded p-3 text-xs text-slate-300 font-mono overflow-x-auto overflow-y-auto max-h-72">{{ ev.request_raw }}</pre>
+              </div>
+              {% endif %}
+
+              {% if ev.response_raw %}
+              <div>
+                <div class="text-xs text-slate-500 uppercase mb-1">Response</div>
+                <pre class="bg-slate-900 rounded p-3 text-xs text-slate-300 font-mono overflow-x-auto overflow-y-auto max-h-72">{{ ev.response_raw }}</pre>
+              </div>
+              {% endif %}
+
+              {% if ev.notes %}
+              <div>
+                <div class="text-xs text-slate-500 uppercase mb-1">Notes</div>
+                <p class="text-sm text-slate-300">{{ ev.notes }}</p>
+              </div>
+              {% endif %}
+
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="text-sm text-slate-500">No evidence packages for this finding.</p>
+    {% endif %}
+  </div>
+
+  <!-- ============================================================ SECRETS -->
+  {% if secrets %}
+  <div class="bg-slate-800 border border-slate-700 rounded-lg p-4" id="secrets-section">
+    <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wide mb-3">
+      Validated Secrets
+      <span class="ml-2 px-1.5 py-0.5 bg-slate-700 text-slate-400 text-xs rounded">{{ secrets | length }}</span>
+    </h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="text-slate-400 uppercase border-b border-slate-700">
+            <th class="px-3 py-2 text-left">Provider</th>
+            <th class="px-3 py-2 text-left">Preview</th>
+            <th class="px-3 py-2 text-left">Status</th>
+            <th class="px-3 py-2 text-left">Identity</th>
+            <th class="px-3 py-2 text-left">Scope</th>
+            <th class="px-3 py-2 text-left"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sv in secrets %}
+          <tr id="secret-row-{{ sv.id }}" class="border-b border-slate-700/50">
+            <td class="px-3 py-2 font-medium text-slate-300">{{ sv.provider }}</td>
+            <td class="px-3 py-2 font-mono text-slate-400">{{ sv.secret_preview | default('—') }}</td>
+            <td class="px-3 py-2">
+              <span class="px-2 py-0.5 rounded-full text-xs font-medium
+                           {% if sv.status == 'live' %}bg-red-900/50 text-red-400 border border-red-700/50
+                           {% elif sv.status == 'invalid' %}bg-slate-700 text-slate-400
+                           {% else %}bg-yellow-900/50 text-yellow-400 border border-yellow-700/50{% endif %}">
+                {{ sv.status }}
+              </span>
+            </td>
+            <td class="px-3 py-2 text-slate-400">{{ sv.identity | default('—') }}</td>
+            <td class="px-3 py-2 text-slate-500 font-mono max-w-xs truncate">
+              {% if sv.scope %}{{ sv.scope | string | truncate(60) }}{% else %}—{% endif %}
+            </td>
+            <td class="px-3 py-2">
+              <button hx-post="/api/secrets/{{ sv.id }}/revalidate"
+                      hx-target="#secret-row-{{ sv.id }}"
+                      hx-swap="outerHTML"
+                      class="px-2 py-1 text-xs bg-slate-700 hover:bg-blue-600 text-slate-300
+                             hover:text-white rounded border border-slate-600 transition-colors">
+                Revalidate
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+
