@@ -39,7 +39,47 @@ from bounty.detect.admin_panels import (
     SolrCoresExposed,
     VaultUIExposed,
 )
+from bounty.detect.ai_infra import (
+    HuggingFaceSpacesMisconfig,
+    OllamaExposed,
+    OpenWebUIExposed,
+    StableDiffusionExposed,
+    TritonExposed,
+    VllmExposed,
+)
+from bounty.detect.api_docs import (
+    GraphqlIntrospection,
+    GraphqlPlayground,
+    OpenApiJsonExposed,
+    PostmanCollectionExposed,
+    SwaggerUiExposed,
+)
 from bounty.detect.base import Detection, DetectionContext, DetectionError
+from bounty.detect.cms_specific import (
+    DrupalChangelogExposed,
+    DrupalCron,
+    DrupalUpdatePhp,
+    JoomlaAdminVersion,
+    JoomlaConfigBackup,
+    MagentoDownloader,
+    MagentoLocalXml,
+    MagentoVersionDisclosure,
+    WpDebugLog,
+    WpInstallExposed,
+    WpReadmeExposed,
+    WpUserEnum,
+    XmlrpcExposed,
+)
+from bounty.detect.cloud import (
+    AzureBlobAnonAccess,
+    AzureStorageContainerListing,
+    CdnCacheBackend,
+    CloudfrontMisconfig,
+    GcpMetadataLeak,
+    GcpStorageBucketListing,
+    S3BucketListing,
+    S3PolicyExposed,
+)
 from bounty.detect.exposed_files.backups import (
     ExposedDatabaseDump,
     ExposedEditorSwap,
@@ -66,6 +106,26 @@ from bounty.detect.exposed_files.source_control import (
     ExposedGithubWorkflows,
     ExposedHgDirectory,
     ExposedSvnDirectory,
+)
+from bounty.detect.java_spring import (
+    ActuatorEnv,
+    ActuatorExposed,
+    ActuatorHeapdump,
+    ActuatorLoggers,
+    H2Console,
+)
+from bounty.detect.network_services import (
+    ElasticsearchHttpExposed,
+    MongoExposed,
+    MysqlExposed,
+    PostgresExposed,
+    RedisExposed,
+)
+from bounty.detect.php_specific import (
+    ComposerFilesExposed,
+    PhpinfoExposed,
+    ServerInfo,
+    ServerStatus,
 )
 
 __all__ = [
@@ -131,5 +191,58 @@ REGISTERED_DETECTIONS: list[Detection] = [
     NexusRepositoryExposed(),
     GitLabPublicProjectsExposed(),
     GiteaPublicReposExposed(),
+    # ── Category 5: CMS-specific (13) ────────────────────────────────────
+    WpDebugLog(),
+    WpInstallExposed(),
+    WpUserEnum(),
+    WpReadmeExposed(),
+    XmlrpcExposed(),
+    DrupalChangelogExposed(),
+    DrupalCron(),
+    DrupalUpdatePhp(),
+    MagentoLocalXml(),
+    MagentoDownloader(),
+    MagentoVersionDisclosure(),
+    JoomlaConfigBackup(),
+    JoomlaAdminVersion(),
+    # ── Category 6: Cloud storage (8) ────────────────────────────────────
+    S3BucketListing(),
+    S3PolicyExposed(),
+    AzureStorageContainerListing(),
+    AzureBlobAnonAccess(),
+    GcpStorageBucketListing(),
+    GcpMetadataLeak(),
+    CdnCacheBackend(),
+    CloudfrontMisconfig(),
+    # ── Category 7: AI/ML infrastructure (6) ─────────────────────────────
+    OllamaExposed(),
+    TritonExposed(),
+    VllmExposed(),
+    StableDiffusionExposed(),
+    OpenWebUIExposed(),
+    HuggingFaceSpacesMisconfig(),
+    # ── Category 8: API documentation (5) ────────────────────────────────
+    SwaggerUiExposed(),
+    OpenApiJsonExposed(),
+    GraphqlIntrospection(),
+    GraphqlPlayground(),
+    PostmanCollectionExposed(),
+    # ── Category 9: Spring Boot Actuator (5) ─────────────────────────────
+    ActuatorExposed(),
+    ActuatorEnv(),
+    ActuatorHeapdump(),
+    ActuatorLoggers(),
+    H2Console(),
+    # ── Category 10: PHP/Apache server info (4) ──────────────────────────
+    PhpinfoExposed(),
+    ServerStatus(),
+    ServerInfo(),
+    ComposerFilesExposed(),
+    # ── Category 11: Network service exposures (5) ───────────────────────
+    RedisExposed(),
+    MongoExposed(),
+    ElasticsearchHttpExposed(),
+    PostgresExposed(),
+    MysqlExposed(),
 ]
 

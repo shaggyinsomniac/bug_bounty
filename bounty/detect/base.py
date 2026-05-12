@@ -21,7 +21,7 @@ from __future__ import annotations
 from abc import ABC
 from collections.abc import AsyncGenerator, Callable, Awaitable
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import structlog
 
@@ -54,6 +54,11 @@ class DetectionContext:
     log: structlog.stdlib.BoundLogger
     _soft_404_cache: dict[str, bool] = field(default_factory=dict)
     _captured_evidence: list[EvidencePackage] = field(default_factory=list)
+    post_json_fn: Callable[[str, Any], Awaitable[ProbeResult]] | None = field(default=None)
+    """Optional POST callable for detections that require it (e.g. GraphQL introspection).
+    Signature: (url: str, json_body: Any) -> ProbeResult.
+    None in contexts where POST is not configured.
+    """
 
     async def capture_evidence(self, url: str, probe_result: ProbeResult) -> EvidencePackage:
         """Capture HTTP evidence and track it for linking to the next finding.
