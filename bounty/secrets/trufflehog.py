@@ -269,7 +269,7 @@ def _parse_trufflehog_line(line: str) -> TrufflehogResult | None:
 
     # Identity — look for common field names
     identity: str | None = (
-        extra.get("account")  # type: ignore[assignment]
+        extra.get("account")
         or extra.get("username")
         or extra.get("identity")
         or extra.get("email")
@@ -341,7 +341,7 @@ async def scan_with_trufflehog(
                 "filesystem",
                 "--json",
                 "--no-update",
-                "--only-verified=false",
+                "--results=verified,unverified,unknown",
                 "--include-detectors",
                 "all",
                 tmp_path,

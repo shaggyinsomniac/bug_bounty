@@ -1620,10 +1620,18 @@ def serve_cmd(
 _TRUFFLEHOG_GITHUB_RELEASES = (
     "https://github.com/trufflesecurity/trufflehog/releases/latest/download/"
 )
+_TRUFFLEHOG_GITHUB_API = (
+    "https://api.github.com/repos/trufflesecurity/trufflehog/releases/latest"
+)
 
 
-def _trufflehog_asset_name() -> str:
-    """Return the platform-specific TruffleHog release asset filename."""
+def _trufflehog_asset_name(version: str = "") -> str:
+    """Return the platform-specific TruffleHog release asset filename.
+
+    Args:
+        version: Version string without 'v' prefix (e.g. '3.95.3').
+                 When empty a versionless name is returned as a fallback.
+    """
     import platform as _platform
 
     system = _platform.system().lower()
@@ -1631,15 +1639,17 @@ def _trufflehog_asset_name() -> str:
 
     if system == "darwin":
         arch = "arm64" if machine in ("arm64", "aarch64") else "amd64"
-        return f"trufflehog_{system}_{arch}.tar.gz"
     elif system == "linux":
         arch = "arm64" if machine in ("arm64", "aarch64") else "amd64"
-        return f"trufflehog_{system}_{arch}.tar.gz"
     elif system == "windows":
-        return "trufflehog_windows_amd64.tar.gz"
+        arch = "amd64"
     else:
-        # Fallback — let the user handle it
-        return f"trufflehog_{system}_amd64.tar.gz"
+        arch = "amd64"
+
+    if version:
+        return f"trufflehog_{version}_{system}_{arch}.tar.gz"
+    # Legacy / fallback (no version in name)
+    return f"trufflehog_{system}_{arch}.tar.gz"
 
 
 @tools_app.command("install-trufflehog")
@@ -1683,8 +1693,41 @@ def install_trufflehog_cmd(
 
     install_path.parent.mkdir(parents=True, exist_ok=True)
 
-    asset_name = _trufflehog_asset_name()
-    url = _TRUFFLEHOG_GITHUB_RELEASES + asset_name
+    # Resolve the actual versioned download URL via the GitHub API so we don't
+    # depend on the /releases/latest/download/ redirect (which can 404 on some
+    # networks/proxies).
+    try:
+        import json as _json
+        api_req = urllib.request.Request(
+            _TRUFFLEHOG_GITHUB_API,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "bounty-installer/1"},
+        )
+        with urllib.request.urlopen(api_req, timeout=15) as _resp:
+            release_data = _json.loads(_resp.read())
+        tag = release_data.get("tag_name", "")
+        version_str = tag.lstrip("v")
+        asset_name = _trufflehog_asset_name(version_str)
+        # Look for the exact asset in the release
+        assets = release_data.get("assets", [])
+        download_url: str | None = None
+        for asset in assets:
+            if asset.get("name") == asset_name:
+                download_url = asset["browser_download_url"]
+                break
+        if download_url is None:
+            # Fallback to constructed URL
+            download_url = (
+                f"https://github.com/trufflesecurity/trufflehog/releases/download/"
+                f"{tag}/{asset_name}"
+                if tag
+                else _TRUFFLEHOG_GITHUB_RELEASES + _trufflehog_asset_name()
+            )
+    except Exception as _api_exc:  # noqa: BLE001
+        # If API lookup fails just try the direct /latest/download/ URL
+        asset_name = _trufflehog_asset_name()
+        download_url = _TRUFFLEHOG_GITHUB_RELEASES + asset_name
+
+    url = download_url
 
     typer.echo(f"[bounty tools install-trufflehog] Downloading {url}")
     typer.echo(f"  → {install_path}")

@@ -32,7 +32,7 @@ import httpx
 from bounty import get_logger
 from bounty.config import Settings, get_settings
 from bounty.events import publish
-from bounty.models import EvidencePackage, Finding, SecretValidation, make_secret_preview, severity_label
+from bounty.models import EvidencePackage, Finding, SecretStatus, SecretValidation, make_secret_preview, severity_label
 from bounty.secrets.scanner import SecretCandidate, scan_evidence_package
 from bounty.ulid import make_ulid
 
@@ -127,7 +127,7 @@ async def _upsert_secret_validation(
     ts = _now_iso()
     row_id = make_ulid()
     scope_json = json.dumps(sv["scope"]) if sv["scope"] else None
-    source = sv.get("source", "native")  # type: ignore[call-overload]
+    source = sv.get("source", "native")
     await conn.execute(
         """
         INSERT INTO secrets_validations
@@ -388,7 +388,7 @@ async def process_finding_secrets(
                         )
                         continue
 
-                    status = "live" if th.verified else "invalid"
+                    status: SecretStatus = "live" if th.verified else "invalid"
                     identity = th.extra_data.get("identity")
                     preview = make_secret_preview(secret_val) if secret_val else "…"
 
