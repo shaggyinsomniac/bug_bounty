@@ -324,6 +324,8 @@ class Finding(_Base):
     validated: bool = False
     validated_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
+    source: str = "native"
+    """Detection source: ``'native'`` (bounty classes) or ``'nuclei'``."""
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -355,6 +357,8 @@ class FindingDraft(_Base):
     cve: str | None = None
     cwe: str | None = None
     tags: list[str] = Field(default_factory=list)
+    source: str = "native"
+    """Detection source: ``'native'`` (bounty classes) or ``'nuclei'``."""
 
     @property
     def computed_severity_label(self) -> SeverityLabel:

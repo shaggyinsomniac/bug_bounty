@@ -59,6 +59,8 @@ class DetectionContext:
     Signature: (url: str, json_body: Any) -> ProbeResult.
     None in contexts where POST is not configured.
     """
+    fingerprints: list[FingerprintResult] = field(default_factory=list)
+    """Fingerprint results for the current asset (populated by run_detections)."""
 
     async def capture_evidence(self, url: str, probe_result: ProbeResult) -> EvidencePackage:
         """Capture HTTP evidence and track it for linking to the next finding.

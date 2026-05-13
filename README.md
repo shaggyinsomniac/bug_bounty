@@ -253,6 +253,70 @@ The tool runs normally without TruffleHog installed.  If the binary is missing:
 
 ---
 
+## Nuclei Integration
+
+Phase 14b integrates [Nuclei OSS](https://github.com/projectdiscovery/nuclei) as an optional subprocess, extending detections with ~10,000 community CVE and misconfiguration templates.
+
+### Install
+
+```bash
+bounty tools install-nuclei
+```
+
+This downloads the platform-appropriate binary from GitHub Releases into `~/.bounty/tools/nuclei`, makes it executable, and runs `nuclei -update-templates` to fetch the community template library.
+
+### Update templates
+
+```bash
+bounty tools update-nuclei-templates
+```
+
+Run periodically to pull the latest community templates.
+
+### Status
+
+```bash
+bounty nuclei status
+```
+
+Shows installed version, template directory, and YAML template count.
+
+### How it works
+
+| Scanner | Templates | Notes |
+|---------|-----------|-------|
+| Native  | 93        | Bounty's hand-tuned detection classes |
+| Nuclei  | ~10,000   | Community CVE + misconfig templates |
+
+Template selection is fingerprint-driven:
+- WordPress fingerprinted → `-tags wordpress` templates run
+- Jenkins fingerprinted → `-tags jenkins`
+- No fingerprints on a hostname → `-tags exposure,misconfig` (broad-but-safe)
+- Bare IPs with no fingerprints → **skipped** (too noisy)
+
+### Safety filters
+
+The following tag categories are **always excluded** to avoid disrupting production systems:
+
+`dos` · `intrusive` · `fuzz` · `brute-force` · `destructive` · `waf-bypass`
+
+### Source badge in UI
+
+Findings now have a **Source** column and badge:
+- 🔵 `native` — detected by bounty's own detection classes
+- 🟣 `nuclei` — detected by the Nuclei community template scanner
+
+The findings list includes a **Source** dropdown filter.
+
+### Without Nuclei
+
+The tool runs normally without Nuclei installed.  If the binary is missing:
+- No subprocess is spawned
+- A debug warning is logged
+- Native detections continue unaffected
+
+---
+
 ## Development
 
 ```bash

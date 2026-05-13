@@ -98,6 +98,18 @@
         </label>
       </div>
 
+      <!-- Source filter -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide" for="source-filter">Source</label>
+        <select id="source-filter" name="source"
+                class="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">All sources</option>
+          <option value="native" {% if filters.get('source') == 'native' %}selected{% endif %}>Native</option>
+          <option value="nuclei"  {% if filters.get('source') == 'nuclei'  %}selected{% endif %}>Nuclei</option>
+        </select>
+      </div>
+
       <!-- Filter button -->
       <div class="flex gap-2 items-end pb-0.5">
         <button id="filter-btn" type="button"
@@ -145,6 +157,8 @@ function applyFilters() {
   if (search) params.set('search', search);
   const validated = document.getElementById('validated-only').checked;
   if (validated) params.set('validated_only', 'true');
+  const source = document.getElementById('source-filter')?.value;
+  if (source) params.set('source', source);
 
   const url = '/findings?' + params.toString();
 

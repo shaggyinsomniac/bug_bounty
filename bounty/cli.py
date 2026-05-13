@@ -1792,12 +1792,17 @@ def install_trufflehog_cmd(
 @tools_app.command("check")
 def tools_check_cmd() -> None:
     """Check which external tool binaries are available."""
-    from bounty.tools import get_trufflehog_path
+    from bounty.tools import get_nuclei_path, get_trufflehog_path
 
     settings = get_settings()
     trufflehog = get_trufflehog_path(
         Path(str(settings.trufflehog_binary_path)).expanduser()
         if settings.trufflehog_binary_path
+        else None
+    )
+    nuclei = get_nuclei_path(
+        Path(str(settings.nuclei_binary_path)).expanduser()
+        if settings.nuclei_binary_path
         else None
     )
 
@@ -1808,6 +1813,310 @@ def tools_check_cmd() -> None:
         typer.echo(
             "  trufflehog  ✗  not found  "
             "(run: bounty tools install-trufflehog)"
+        )
+    if nuclei:
+        typer.echo(f"  nuclei      ✓  {nuclei}")
+    else:
+        typer.echo(
+            "  nuclei      ✗  not found  "
+            "(run: bounty tools install-nuclei)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Nuclei install / update helpers
+# ---------------------------------------------------------------------------
+
+_NUCLEI_GITHUB_API = (
+    "https://api.github.com/repos/projectdiscovery/nuclei/releases/latest"
+)
+
+
+def _nuclei_asset_name(version: str = "") -> str:
+    """Return the platform-specific Nuclei release asset filename.
+
+    Nuclei releases use zip archives (not tar.gz) named:
+    ``nuclei_{version}_{os}_{arch}.zip``
+
+    Note: Nuclei uses ``macOS`` (not ``darwin``) for macOS assets.
+    """
+    import platform as _platform
+
+    system = _platform.system().lower()
+    machine = _platform.machine().lower()
+
+    if system == "darwin":
+        os_str = "macOS"
+        arch = "arm64" if machine in ("arm64", "aarch64") else "amd64"
+    elif system == "linux":
+        os_str = "linux"
+        arch = "arm64" if machine in ("arm64", "aarch64") else "amd64"
+    elif system == "windows":
+        os_str = "windows"
+        arch = "amd64"
+    else:
+        os_str = system
+        arch = "amd64"
+
+    if version:
+        return f"nuclei_{version}_{os_str}_{arch}.zip"
+    return f"nuclei_{os_str}_{arch}.zip"
+
+
+@tools_app.command("install-nuclei")
+def install_nuclei_cmd(
+    dest: Annotated[
+        Path | None,
+        typer.Option(
+            "--dest",
+            "-d",
+            help="Destination path for the binary (default: ~/.bounty/tools/nuclei)",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Re-download even if binary already exists"),
+    ] = False,
+    skip_templates: Annotated[
+        bool,
+        typer.Option("--skip-templates", help="Skip nuclei -update-templates after install"),
+    ] = False,
+) -> None:
+    """Download the Nuclei OSS binary for this platform and fetch templates.
+
+    Downloads from GitHub Releases into ``~/.bounty/tools/nuclei`` (or a
+    custom path via ``--dest``) and makes it executable.  Then runs
+    ``nuclei -update-templates`` to fetch the community template library.
+
+    Run this once before using Nuclei-backed vulnerability detection::
+
+        bounty tools install-nuclei
+    """
+    import json as _json
+    import os
+    import stat
+    import tempfile
+    import urllib.request
+    import zipfile
+
+    install_path = dest or (Path.home() / ".bounty" / "tools" / "nuclei")
+
+    if install_path.exists() and not force:
+        typer.echo(
+            f"[bounty tools install-nuclei] Nuclei already installed at {install_path}"
+        )
+        typer.echo("  Use --force to re-download.")
+        return
+
+    install_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Resolve the actual versioned download URL via the GitHub API
+    try:
+        api_req = urllib.request.Request(
+            _NUCLEI_GITHUB_API,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "bounty-installer/1",
+            },
+        )
+        with urllib.request.urlopen(api_req, timeout=15) as _resp:
+            release_data = _json.loads(_resp.read())
+        tag: str = release_data.get("tag_name", "")
+        version_str = tag.lstrip("v")
+        asset_name = _nuclei_asset_name(version_str)
+        assets = release_data.get("assets", [])
+        download_url: str | None = None
+        for asset in assets:
+            if asset.get("name") == asset_name:
+                download_url = asset["browser_download_url"]
+                break
+        if download_url is None:
+            download_url = (
+                f"https://github.com/projectdiscovery/nuclei/releases/download/"
+                f"{tag}/{asset_name}"
+                if tag
+                else f"https://github.com/projectdiscovery/nuclei/releases/latest/download/{_nuclei_asset_name()}"
+            )
+    except Exception as _api_exc:  # noqa: BLE001
+        asset_name = _nuclei_asset_name()
+        download_url = (
+            f"https://github.com/projectdiscovery/nuclei/releases/latest/download/{asset_name}"
+        )
+
+    url = download_url
+    typer.echo(f"[bounty tools install-nuclei] Downloading {url}")
+    typer.echo(f"  → {install_path}")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = Path(tmpdir) / asset_name
+
+            def _report(count: int, block_size: int, total_size: int) -> None:
+                if total_size > 0:
+                    pct = min(count * block_size * 100 // total_size, 100)
+                    typer.echo(f"\r  {pct}%", nl=False)
+
+            urllib.request.urlretrieve(url, str(zip_path), _report)
+            typer.echo("")  # newline after progress
+
+            # Extract the 'nuclei' binary from the zip
+            with zipfile.ZipFile(str(zip_path), "r") as zf:
+                binary_name: str | None = None
+                for member in zf.namelist():
+                    base = member.rstrip("/").split("/")[-1]
+                    if base in ("nuclei", "nuclei.exe"):
+                        binary_name = member
+                        break
+
+                if binary_name is None:
+                    typer.echo(
+                        "[error] Could not find 'nuclei' binary in the downloaded archive.",
+                        err=True,
+                    )
+                    raise typer.Exit(1)
+
+                install_path.write_bytes(zf.read(binary_name))
+
+        # chmod +x
+        current_mode = install_path.stat().st_mode
+        install_path.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    except typer.Exit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] Download failed: {exc}", err=True)
+        typer.echo(
+            "\nManual install alternative:\n"
+            f"  Download: {url}\n"
+            f"  Extract binary to: {install_path}\n"
+            "  chmod +x <path>",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"[bounty tools install-nuclei] ✓ Installed Nuclei at {install_path}"
+    )
+
+    if not skip_templates:
+        typer.echo("[bounty tools install-nuclei] Fetching nuclei templates…")
+        try:
+            import subprocess as _subprocess
+            result = _subprocess.run(
+                [str(install_path), "-update-templates", "-silent"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if result.returncode == 0:
+                typer.echo("[bounty tools install-nuclei] ✓ Templates updated.")
+            else:
+                typer.echo(
+                    f"[warn] Template update exited {result.returncode}: "
+                    f"{result.stderr.strip()[:200]}",
+                    err=True,
+                )
+        except Exception as _tmpl_exc:  # noqa: BLE001
+            typer.echo(
+                f"[warn] Could not update templates: {_tmpl_exc}",
+                err=True,
+            )
+
+
+@tools_app.command("update-nuclei-templates")
+def update_nuclei_templates_cmd() -> None:
+    """Fetch the latest Nuclei community templates.
+
+    Runs ``nuclei -update-templates -silent`` using the installed binary.
+    """
+    import subprocess as _subprocess
+    from bounty.tools import get_nuclei_path
+
+    settings = get_settings()
+    nuclei_path = get_nuclei_path(
+        Path(str(settings.nuclei_binary_path)).expanduser()
+        if settings.nuclei_binary_path
+        else None
+    )
+    if nuclei_path is None:
+        typer.echo(
+            "[error] Nuclei binary not found. Run: bounty tools install-nuclei",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo("[bounty tools update-nuclei-templates] Updating templates…")
+    try:
+        result = _subprocess.run(
+            [str(nuclei_path), "-update-templates", "-silent"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode == 0:
+            typer.echo("[bounty tools update-nuclei-templates] ✓ Templates updated.")
+        else:
+            typer.echo(
+                f"[error] Template update failed (exit {result.returncode}):\n"
+                f"{result.stderr.strip()[:500]}",
+                err=True,
+            )
+            raise typer.Exit(1)
+    except TimeoutError:
+        typer.echo("[error] Template update timed out.", err=True)
+        raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# nuclei sub-app
+# ---------------------------------------------------------------------------
+
+nuclei_app = typer.Typer(help="Nuclei scanner management commands.")
+app.add_typer(nuclei_app, name="nuclei")
+
+
+@nuclei_app.command("status")
+def nuclei_status_cmd() -> None:
+    """Show Nuclei version, template count, and last update."""
+    import subprocess as _subprocess
+    from bounty.tools import get_nuclei_path
+
+    settings = get_settings()
+    nuclei_path = get_nuclei_path(
+        Path(str(settings.nuclei_binary_path)).expanduser()
+        if settings.nuclei_binary_path
+        else None
+    )
+
+    if nuclei_path is None:
+        typer.echo("Nuclei: ✗  not installed  (run: bounty tools install-nuclei)")
+        return
+
+    typer.echo(f"Nuclei binary : {nuclei_path}")
+
+    # Version
+    try:
+        ver = _subprocess.run(
+            [str(nuclei_path), "-version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        version_line = (ver.stdout + ver.stderr).strip().splitlines()
+        typer.echo(f"Version       : {version_line[0] if version_line else 'unknown'}")
+    except Exception:  # noqa: BLE001
+        typer.echo("Version       : (could not determine)")
+
+    # Template count
+    templates_dir = Path.home() / "nuclei-templates"
+    if not templates_dir.exists():
+        templates_dir = Path.home() / ".nuclei-templates"
+    if templates_dir.exists():
+        yaml_count = len(list(templates_dir.rglob("*.yaml")))
+        typer.echo(f"Templates     : {yaml_count:,} YAML files in {templates_dir}")
+    else:
+        typer.echo(
+            "Templates     : none found  (run: bounty tools update-nuclei-templates)"
         )
 
 

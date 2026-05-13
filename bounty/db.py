@@ -861,6 +861,17 @@ ALTER TABLE secrets_validations ADD COLUMN source TEXT NOT NULL DEFAULT 'native'
 COMMIT;
 """
 
+# v10 migration (Phase 14b): add source column to findings.
+# 'native'  = detected by bounty's own Detection classes.
+# 'nuclei'  = detected by the Nuclei subprocess scanner.
+_MIGRATION_V10 = """
+BEGIN TRANSACTION;
+
+ALTER TABLE findings ADD COLUMN source TEXT NOT NULL DEFAULT 'native';
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
     _MIGRATION_V1,
     # v2 → add leads table for intel / Shodan triage.
@@ -885,6 +896,10 @@ _MIGRATIONS: list[str] = [
     #   'native'     = detected + validated by bounty's own scanner/validators.
     #   'trufflehog' = detected by TruffleHog subprocess.
     _MIGRATION_V9,
+    # v10 (Phase 14b) → add source column to findings.
+    #   'native' = detected by bounty's own Detection classes.
+    #   'nuclei' = detected by the Nuclei subprocess scanner.
+    _MIGRATION_V10,
 ]
 
 

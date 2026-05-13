@@ -60,9 +60,9 @@ async def _persist_finding(
             INSERT INTO findings
                 (id, program_id, asset_id, scan_id, dedup_key, title, category,
                  severity, severity_label, status, url, path, description,
-                 remediation, cve, cwe, validated, validated_at, tags,
+                 remediation, cve, cwe, validated, validated_at, tags, source,
                  created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?,1,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?,1,?,?,?,?,?)
             ON CONFLICT(dedup_key) DO UPDATE SET
                 updated_at = excluded.updated_at,
                 scan_id    = COALESCE(excluded.scan_id, scan_id)
@@ -85,6 +85,7 @@ async def _persist_finding(
                 draft.cwe,
                 ts,  # validated_at
                 tags_json,
+                draft.source,
                 ts,  # created_at
                 ts,  # updated_at
             ),
@@ -130,6 +131,7 @@ async def _persist_finding(
         validated=True,
         validated_at=datetime.fromisoformat(ts.replace("Z", "+00:00")),
         tags=draft.tags,
+        source=draft.source,
         created_at=datetime.fromisoformat(ts.replace("Z", "+00:00")),
         updated_at=datetime.fromisoformat(ts.replace("Z", "+00:00")),
     )
@@ -173,6 +175,9 @@ async def run_detections(
     """
     registry = detections if detections is not None else REGISTERED_DETECTIONS
     bound_log = ctx.log.bind(asset=asset.host)
+
+    # Expose fingerprints on ctx so Nuclei and other detections can access them
+    ctx.fingerprints = fingerprints
 
     for detection in registry:
         try:

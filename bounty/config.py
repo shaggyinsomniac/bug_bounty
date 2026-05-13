@@ -17,7 +17,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -131,6 +131,27 @@ class Settings(BaseSettings):
     trufflehog_timeout_seconds: int = 60
     """Maximum seconds to wait for each TruffleHog subprocess invocation."""
 
+    # --------------------------------------------------------- nuclei
+    nuclei_enabled: bool = True
+    """Run Nuclei on assets to inherit ~10,000 community CVE and misconfig templates."""
+
+    nuclei_binary_path: Path = Path("~/.bounty/tools/nuclei")
+    """Path to the Nuclei binary.  Resolved with expanduser() at runtime."""
+
+    nuclei_severities: list[str] = Field(
+        default_factory=lambda: ["medium", "high", "critical"]
+    )
+    """Severity levels to include in Nuclei scans."""
+
+    nuclei_timeout_seconds: int = 300
+    """Per-asset Nuclei scan timeout in seconds."""
+
+    nuclei_rate_limit: int = 50
+    """Maximum requests per second for Nuclei."""
+
+    nuclei_total_time_budget: int = 1800
+    """Total Nuclei time budget for an entire scan in seconds (default 30 min)."""
+
     # --------------------------------------------------------- validators
     @field_validator("default_intensity")
     @classmethod
@@ -141,7 +162,8 @@ class Settings(BaseSettings):
         return v
 
     @field_validator(
-        "data_dir", "tools_dir", "nuclei_templates_dir", "trufflehog_binary_path",
+        "data_dir", "tools_dir", "nuclei_templates_dir",
+        "trufflehog_binary_path", "nuclei_binary_path",
         mode="before",
     )
     @classmethod

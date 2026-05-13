@@ -55,6 +55,7 @@ from bounty.detect.api_docs import (
     SwaggerUiExposed,
 )
 from bounty.detect.base import Detection, DetectionContext, DetectionError
+from bounty.detect.nuclei_detection import NucleiCveCheck
 from bounty.detect.cms_specific import (
     DrupalChangelogExposed,
     DrupalCron,
@@ -244,5 +245,7 @@ REGISTERED_DETECTIONS: list[Detection] = [
     ElasticsearchHttpExposed(),
     PostgresExposed(),
     MysqlExposed(),
+    # ── Category 12: Nuclei CVE / community templates (1) ────────────────
+    NucleiCveCheck(),
 ]
 
