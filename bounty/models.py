@@ -529,3 +529,44 @@ class Lead(_Base):
     discovered_at: datetime | None = None
 
 
+# ---------------------------------------------------------------------------
+# Scheduler / Queue (Phase 8)
+# ---------------------------------------------------------------------------
+
+QueueStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
+
+
+class ScanSchedule(_Base):
+    """A recurring scan schedule row from scan_schedules."""
+
+    id: str
+    program_id: str
+    name: str
+    cron_expression: str | None = None
+    interval_minutes: int | None = None
+    intensity: str = "gentle"
+    enabled: bool = True
+    last_run_at: str | None = None
+    next_run_at: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    retry_count: int = 0
+
+
+class ScanQueueEntry(_Base):
+    """A single entry in the scan_queue table."""
+
+    id: str
+    program_id: str
+    intensity: str = "gentle"
+    priority: int = 100
+    status: QueueStatus = "queued"
+    reason: str | None = None
+    submitted_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    scan_id: str | None = None
+    error_message: str | None = None
+    retry_count: int = 0
+
+

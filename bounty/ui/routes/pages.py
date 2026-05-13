@@ -961,3 +961,55 @@ async def readyz(db_path: DbPathDep) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=503)
     return JSONResponse({"status": "ready"})
 
+
+# ---------------------------------------------------------------------------
+# Schedules page
+# ---------------------------------------------------------------------------
+
+@router.get("/schedules", response_class=HTMLResponse)
+async def schedules_page(
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+) -> Response:
+    """Scan schedules management page."""
+    async with get_conn(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT * FROM scan_schedules ORDER BY created_at DESC"
+        )
+        rows = await cur.fetchall()
+        schedules_list = [{k: row[k] for k in row.keys()} for row in rows]
+
+        prog_cur = await conn.execute("SELECT id, name FROM programs WHERE active=1 ORDER BY name")
+        programs_list = [{k: r[k] for k in r.keys()} for r in await prog_cur.fetchall()]
+
+    return _tmpl(request, "schedules/list.html", {
+        "schedules": schedules_list,
+        "programs": programs_list,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Queue page
+# ---------------------------------------------------------------------------
+
+@router.get("/queue", response_class=HTMLResponse)
+async def queue_page(
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+) -> Response:
+    """Scan queue live view page."""
+    async with get_conn(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT q.*, p.name as program_name FROM scan_queue q "
+            "LEFT JOIN programs p ON q.program_id = p.id "
+            "ORDER BY q.priority DESC, q.submitted_at ASC"
+        )
+        rows = await cur.fetchall()
+        queue_entries = [{k: row[k] for k in row.keys()} for row in rows]
+
+    return _tmpl(request, "queue/list.html", {"queue_entries": queue_entries})
+
+
+

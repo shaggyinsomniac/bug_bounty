@@ -23,7 +23,7 @@
   {% else %}
 
   <!-- ====================================================== KPI CARDS -->
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+  <div class="grid grid-cols-2 lg:grid-cols-5 gap-4">
 
     <!-- Programs -->
     <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
@@ -66,6 +66,15 @@
         {{ stats.live_secrets }}
       </div>
       <div class="text-xs text-slate-500 mt-1">validated tokens</div>
+    </div>
+
+    <!-- Queue Depth -->
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+      <div class="text-xs text-slate-400 uppercase tracking-wide mb-1">Queue Depth</div>
+      <div id="kpi-queue" class="text-3xl font-bold text-slate-100">{{ stats.get('queue_depth', 0) }}</div>
+      <div class="text-xs text-slate-500 mt-1">
+        <a href="/queue" class="text-blue-400 hover:text-blue-300">queued + running →</a>
+      </div>
     </div>
 
   </div>
@@ -167,6 +176,7 @@
             ? 'text-3xl font-bold text-red-400 animate-pulse'
             : 'text-3xl font-bold text-slate-100';
         }
+        if (el('kpi-queue')) el('kpi-queue').textContent = d.queue_depth ?? '';
       } catch (_) {}
     }, 15000);
   });

@@ -13,8 +13,10 @@ from bounty.ui.routes import (
     intel,
     palette,
     programs,
+    queue,
     reports,
     scans,
+    schedules,
     secrets,
     sse_routes,
     system,
@@ -35,3 +37,5 @@ router.include_router(system.router)
 router.include_router(palette.router)
 router.include_router(intel.router)
 router.include_router(sse_routes.router)
+router.include_router(schedules.router)
+router.include_router(queue.router)

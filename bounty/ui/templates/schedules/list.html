@@ -1,0 +1,199 @@
+{% extends "_base.html" %}
+{% block title %}Schedules{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="schedulesPage()">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-slate-100">Scan Schedules</h1>
+    <button @click="openModal = true"
+            class="bg-blue-600 hover:bg-blue-500 text-white text-sm px-4 py-2 rounded transition-colors">
+      + New Schedule
+    </button>
+  </div>
+
+  <!-- Table -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+    {% if schedules %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-400 uppercase border-b border-slate-700">
+            <th class="px-3 py-2 text-left">Name</th>
+            <th class="px-3 py-2 text-left">Program</th>
+            <th class="px-3 py-2 text-left">Trigger</th>
+            <th class="px-3 py-2 text-left">Intensity</th>
+            <th class="px-3 py-2 text-left">Enabled</th>
+            <th class="px-3 py-2 text-left">Last Run</th>
+            <th class="px-3 py-2 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in schedules %}
+          <tr class="border-b border-slate-700/50 hover:bg-slate-700/30">
+            <td class="px-3 py-2 font-medium text-slate-100">{{ s.name }}</td>
+            <td class="px-3 py-2 text-slate-300 font-mono text-xs">{{ s.program_id }}</td>
+            <td class="px-3 py-2 text-slate-300">
+              {% if s.cron_expression %}
+                <span class="font-mono text-xs bg-slate-700 px-1.5 py-0.5 rounded">{{ s.cron_expression }}</span>
+              {% elif s.interval_minutes %}
+                every {{ s.interval_minutes }}m
+              {% endif %}
+            </td>
+            <td class="px-3 py-2">
+              <span class="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300">{{ s.intensity }}</span>
+            </td>
+            <td class="px-3 py-2">
+              {% if s.enabled %}
+                <span class="text-green-400 text-xs">✓ enabled</span>
+              {% else %}
+                <span class="text-slate-500 text-xs">disabled</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-slate-400 text-xs">{{ s.last_run_at or '—' }}</td>
+            <td class="px-3 py-2 text-right">
+              <div class="flex gap-2 justify-end">
+                {% if s.enabled %}
+                  <button onclick="toggleSchedule('{{ s.id }}', false)"
+                          class="text-xs text-yellow-400 hover:text-yellow-300">Disable</button>
+                {% else %}
+                  <button onclick="toggleSchedule('{{ s.id }}', true)"
+                          class="text-xs text-green-400 hover:text-green-300">Enable</button>
+                {% endif %}
+                <button onclick="deleteSchedule('{{ s.id }}')"
+                        class="text-xs text-red-400 hover:text-red-300">Delete</button>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="p-8 text-center text-slate-400">
+        No schedules configured yet. Click <strong>+ New Schedule</strong> to create one.
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- New Schedule Modal -->
+  <div x-show="openModal" x-cloak
+       class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
+       @click.self="openModal = false">
+    <div class="bg-slate-800 border border-slate-600 rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
+      <h2 class="text-lg font-semibold text-slate-100 mb-4">New Scan Schedule</h2>
+
+      <form id="new-schedule-form" class="space-y-4" onsubmit="submitSchedule(event)">
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Program</label>
+          <select name="program_id" required
+                  class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100">
+            {% for p in programs %}
+              <option value="{{ p.id }}">{{ p.name }} ({{ p.id }})</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Schedule Name</label>
+          <input type="text" name="name" required placeholder="e.g. daily-scan"
+                 class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100">
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Trigger</label>
+          <div class="flex gap-2 mb-2">
+            <label class="flex items-center gap-2 text-sm text-slate-300">
+              <input type="radio" name="trigger_type" value="interval" checked @change="triggerType='interval'">
+              Interval (minutes)
+            </label>
+            <label class="flex items-center gap-2 text-sm text-slate-300">
+              <input type="radio" name="trigger_type" value="cron" @change="triggerType='cron'">
+              Cron expression
+            </label>
+          </div>
+          <input x-show="triggerType==='interval'" type="number" name="interval_minutes"
+                 min="1" placeholder="60"
+                 class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100">
+          <input x-show="triggerType==='cron'" type="text" name="cron_expression"
+                 placeholder="0 * * * *"
+                 class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100">
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Intensity</label>
+          <select name="intensity"
+                  class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100">
+            <option value="gentle">gentle</option>
+            <option value="normal">normal</option>
+            <option value="aggressive">aggressive</option>
+          </select>
+        </div>
+
+        <div class="flex gap-3 justify-end pt-2">
+          <button type="button" @click="openModal = false"
+                  class="text-sm text-slate-400 hover:text-white px-4 py-2">Cancel</button>
+          <button type="submit"
+                  class="bg-blue-600 hover:bg-blue-500 text-white text-sm px-4 py-2 rounded">
+            Create Schedule
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function schedulesPage() {
+  return {
+    openModal: false,
+    triggerType: 'interval',
+  };
+}
+
+async function submitSchedule(e) {
+  e.preventDefault();
+  const form = e.target;
+  const fd = new FormData(form);
+  const payload = {
+    program_id: fd.get('program_id'),
+    name: fd.get('name'),
+    intensity: fd.get('intensity'),
+  };
+  if (fd.get('trigger_type') === 'cron') {
+    payload.cron_expression = fd.get('cron_expression');
+  } else {
+    payload.interval_minutes = parseInt(fd.get('interval_minutes') || '60', 10);
+  }
+  const r = await fetch('/api/schedules', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  if (r.ok) {
+    location.reload();
+  } else {
+    const err = await r.json();
+    alert('Error: ' + JSON.stringify(err));
+  }
+}
+
+async function toggleSchedule(id, enabled) {
+  await fetch(`/api/schedules/${id}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled}),
+  });
+  location.reload();
+}
+
+async function deleteSchedule(id) {
+  if (!confirm('Delete this schedule?')) return;
+  await fetch(`/api/schedules/${id}`, {method: 'DELETE'});
+  location.reload();
+}
+</script>
+{% endblock %}
+

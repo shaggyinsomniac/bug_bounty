@@ -2120,17 +2120,311 @@ def nuclei_status_cmd() -> None:
         )
 
 
+
+# ---------------------------------------------------------------------------
+# schedule sub-commands
+# ---------------------------------------------------------------------------
+
+schedule_app = typer.Typer(help="Manage recurring scan schedules.")
+app.add_typer(schedule_app, name="schedule")
+
+
+@schedule_app.command("list")
+def schedule_list_cmd(
+    program: Annotated[str | None, typer.Option("--program", "-p")] = None,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """List all scan schedules."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+    init_db(db_path)
+    apply_migrations(db_path)
+
+    async def _list() -> list[Any]:
+        async with get_conn(db_path) as conn:
+            if program:
+                cur = await conn.execute(
+                    "SELECT * FROM scan_schedules WHERE program_id=? ORDER BY created_at DESC",
+                    (program,),
+                )
+            else:
+                cur = await conn.execute(
+                    "SELECT * FROM scan_schedules ORDER BY created_at DESC"
+                )
+            return list(await cur.fetchall())
+
+    try:
+        rows = asyncio.run(_list())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not rows:
+        typer.echo("No schedules found.")
+        return
+
+    header = f"{'ID':<26}  {'NAME':<20}  {'PROGRAM':<25}  {'TRIGGER':<20}  {'INTENSITY':<10}  ENABLED"
+    typer.echo(header)
+    typer.echo("-" * len(header))
+    for row in rows:
+        trigger = row["cron_expression"] or f"every {row['interval_minutes']}m"
+        enabled = "yes" if row["enabled"] else "no"
+        typer.echo(
+            f"{row['id']:<26}  {str(row['name'])[:20]:<20}  "
+            f"{str(row['program_id'])[:25]:<25}  {trigger[:20]:<20}  "
+            f"{str(row['intensity']):<10}  {enabled}"
+        )
+
+
+@schedule_app.command("add")
+def schedule_add_cmd(
+    program: Annotated[str, typer.Option("--program", "-p", help="Program ID")],
+    name: Annotated[str, typer.Option("--name", "-n", help="Schedule name")],
+    cron: Annotated[str | None, typer.Option("--cron", help="Cron expression (e.g. '0 * * * *')")] = None,
+    interval_minutes: Annotated[int | None, typer.Option("--interval-minutes", help="Run every N minutes")] = None,
+    intensity: Annotated[str, typer.Option("--intensity", "-i")] = "gentle",
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Add a new recurring scan schedule."""
+    if cron is None and interval_minutes is None:
+        typer.echo("[error] Either --cron or --interval-minutes is required.", err=True)
+        raise typer.Exit(1)
+
+    settings = get_settings()
+    db_path = db or settings.db_path
+    init_db(db_path)
+    apply_migrations(db_path)
+
+    from bounty.ulid import make_ulid as _ulid
+    from datetime import timezone as _tz
+
+    schedule_id = _ulid()
+    now = datetime.now(tz=_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    async def _insert() -> None:
+        async with get_conn(db_path) as conn:
+            await conn.execute(
+                """
+                INSERT INTO scan_schedules
+                    (id, program_id, name, cron_expression, interval_minutes,
+                     intensity, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (schedule_id, program, name, cron, interval_minutes, intensity, now, now),
+            )
+            await conn.commit()
+
+    try:
+        asyncio.run(_insert())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"[bounty schedule add] created schedule {schedule_id}  ({name})")
+
+
+@schedule_app.command("rm")
+def schedule_rm_cmd(
+    schedule_id: Annotated[str, typer.Argument(help="Schedule ID to remove")],
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Remove a schedule."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _delete() -> bool:
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                "DELETE FROM scan_schedules WHERE id=?", (schedule_id,)
+            )
+            await conn.commit()
+            return bool(cur.rowcount and cur.rowcount > 0)
+
+    try:
+        ok = asyncio.run(_delete())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not ok:
+        typer.echo(f"[error] Schedule {schedule_id!r} not found.", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"[bounty schedule rm] deleted {schedule_id}")
+
+
+@schedule_app.command("enable")
+def schedule_enable_cmd(
+    schedule_id: Annotated[str, typer.Argument()],
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Enable a schedule."""
+    _set_enabled(schedule_id, True, db)
+
+
+@schedule_app.command("disable")
+def schedule_disable_cmd(
+    schedule_id: Annotated[str, typer.Argument()],
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Disable a schedule."""
+    _set_enabled(schedule_id, False, db)
+
+
+def _set_enabled(schedule_id: str, enabled: bool, db: Path | None) -> None:
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _update() -> bool:
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                "UPDATE scan_schedules SET enabled=? WHERE id=?",
+                (1 if enabled else 0, schedule_id),
+            )
+            await conn.commit()
+            return bool(cur.rowcount and cur.rowcount > 0)
+
+    try:
+        ok = asyncio.run(_update())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not ok:
+        typer.echo(f"[error] Schedule {schedule_id!r} not found.", err=True)
+        raise typer.Exit(1)
+
+    verb = "enabled" if enabled else "disabled"
+    typer.echo(f"[bounty schedule {verb}] {schedule_id}")
+
+
+# ---------------------------------------------------------------------------
+# queue sub-commands
+# ---------------------------------------------------------------------------
+
+queue_app = typer.Typer(help="Manage the scan queue.")
+app.add_typer(queue_app, name="queue")
+
+
+@queue_app.command("list")
+def queue_list_cmd(
+    status: Annotated[
+        str,
+        typer.Option("--status", help="Filter: queued|running|completed|failed|all"),
+    ] = "queued,running",
+    limit: Annotated[int, typer.Option("--limit")] = 50,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """List scan queue entries showing priority and age."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+    init_db(db_path)
+    apply_migrations(db_path)
+
+    statuses = [s.strip() for s in status.split(",") if s.strip()] if status != "all" else []
+
+    async def _list() -> list[Any]:
+        async with get_conn(db_path) as conn:
+            if statuses:
+                placeholders = ",".join("?" * len(statuses))
+                cur = await conn.execute(
+                    f"SELECT * FROM scan_queue WHERE status IN ({placeholders}) "
+                    "ORDER BY priority DESC, submitted_at ASC LIMIT ?",
+                    [*statuses, limit],
+                )
+            else:
+                cur = await conn.execute(
+                    "SELECT * FROM scan_queue ORDER BY priority DESC, submitted_at ASC LIMIT ?",
+                    (limit,),
+                )
+            return list(await cur.fetchall())
+
+    try:
+        rows = asyncio.run(_list())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not rows:
+        typer.echo("Queue is empty.")
+        return
+
+    header = f"{'ID':<26}  {'PROGRAM':<25}  {'STATUS':<10}  {'PRI':>4}  {'RETRIES':>7}  SUBMITTED"
+    typer.echo(header)
+    typer.echo("-" * len(header))
+    for row in rows:
+        typer.echo(
+            f"{row['id']:<26}  {str(row['program_id'] or '')[:25]:<25}  "
+            f"{str(row['status']):<10}  {row['priority']:>4}  "
+            f"{row['retry_count']:>7}  {row['submitted_at'] or '—'}"
+        )
+    typer.echo(f"\n{len(rows)} entries shown.")
+
+
+@queue_app.command("cancel")
+def queue_cancel_cmd(
+    entry_id: Annotated[str, typer.Argument(help="Queue entry ID to cancel")],
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Cancel a queued or running scan entry."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _cancel() -> bool:
+        from bounty.scheduler import ScanQueue
+        q = ScanQueue(db_path)
+        return await q.cancel(entry_id)
+
+    try:
+        ok = asyncio.run(_cancel())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not ok:
+        typer.echo(f"[error] Entry {entry_id!r} not found or already finished.", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"[bounty queue cancel] {entry_id} → cancelled")
+
+
+@queue_app.command("retry")
+def queue_retry_cmd(
+    entry_id: Annotated[str, typer.Argument(help="Failed queue entry ID to re-enqueue")],
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Re-enqueue a failed scan entry."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+
+    async def _retry() -> str | None:
+        from bounty.scheduler import ScanQueue
+        q = ScanQueue(db_path)
+        new = await q.retry(entry_id)
+        return new.id if new else None
+
+    try:
+        new_id = asyncio.run(_retry())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not new_id:
+        typer.echo(f"[error] Entry {entry_id!r} not found or not in 'failed' state.", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"[bounty queue retry] {entry_id} → new entry {new_id}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 if __name__ == "__main__":
     app()
-
-
-
-
-
-
-
-
-
-
-
-

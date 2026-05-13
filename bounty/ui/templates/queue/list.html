@@ -1,0 +1,141 @@
+{% extends "_base.html" %}
+{% block title %}Queue{% endblock %}
+
+{% block head %}
+<style>
+  .status-queued   { background: #1e40af; color: #bfdbfe; }
+  .status-running  { background: #065f46; color: #6ee7b7; }
+  .status-completed{ background: #1f2937; color: #9ca3af; }
+  .status-failed   { background: #7f1d1d; color: #fca5a5; }
+  .status-cancelled{ background: #374151; color: #9ca3af; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-slate-100">Scan Queue</h1>
+    <div class="flex gap-3 items-center">
+      <span class="text-xs text-slate-500">Auto-refreshes via SSE</span>
+      <button onclick="location.reload()"
+              class="text-sm text-blue-400 hover:text-blue-300 px-3 py-1 rounded border border-slate-600">
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <!-- Stats bar -->
+  <div class="flex gap-4 text-sm">
+    {% set queued_count = queue_entries | selectattr('status', 'equalto', 'queued') | list | length %}
+    {% set running_count = queue_entries | selectattr('status', 'equalto', 'running') | list | length %}
+    <span class="text-slate-400">
+      <span class="text-blue-400 font-medium">{{ queued_count }}</span> queued
+    </span>
+    <span class="text-slate-400">
+      <span class="text-green-400 font-medium">{{ running_count }}</span> running
+    </span>
+    <span class="text-slate-400">{{ queue_entries | length }} total</span>
+  </div>
+
+  <!-- Queue table -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden"
+       hx-get="/queue?htmx=1"
+       hx-trigger="every 10s"
+       hx-target="this"
+       hx-swap="outerHTML">
+    {% if queue_entries %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-400 uppercase border-b border-slate-700">
+            <th class="px-3 py-2 text-left">ID</th>
+            <th class="px-3 py-2 text-left">Program</th>
+            <th class="px-3 py-2 text-left">Status</th>
+            <th class="px-3 py-2 text-left">Priority</th>
+            <th class="px-3 py-2 text-left">Intensity</th>
+            <th class="px-3 py-2 text-left">Reason</th>
+            <th class="px-3 py-2 text-left">Age</th>
+            <th class="px-3 py-2 text-left">Retries</th>
+            <th class="px-3 py-2 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in queue_entries %}
+          <tr class="border-b border-slate-700/50 hover:bg-slate-700/30" id="qe-{{ e.id }}">
+            <td class="px-3 py-2 font-mono text-xs text-slate-400">{{ e.id[:12] }}…</td>
+            <td class="px-3 py-2 text-slate-200 text-xs">
+              {{ e.get('program_name') or e.program_id }}
+            </td>
+            <td class="px-3 py-2">
+              <span class="text-xs px-2 py-0.5 rounded status-{{ e.status }}">{{ e.status }}</span>
+            </td>
+            <td class="px-3 py-2 text-slate-300">{{ e.priority }}</td>
+            <td class="px-3 py-2 text-slate-400 text-xs">{{ e.intensity }}</td>
+            <td class="px-3 py-2 text-slate-400 text-xs max-w-32 truncate" title="{{ e.reason or '' }}">
+              {{ (e.reason or '—')[:32] }}
+            </td>
+            <td class="px-3 py-2 text-slate-400 text-xs">
+              {{ e.submitted_at[:16] if e.submitted_at else '—' }}
+            </td>
+            <td class="px-3 py-2 text-slate-400 text-center">{{ e.retry_count }}</td>
+            <td class="px-3 py-2 text-right">
+              <div class="flex gap-2 justify-end">
+                {% if e.status in ('queued', 'running') %}
+                  <button onclick="cancelEntry('{{ e.id }}')"
+                          class="text-xs text-red-400 hover:text-red-300">Cancel</button>
+                {% elif e.status == 'failed' %}
+                  <button onclick="retryEntry('{{ e.id }}')"
+                          class="text-xs text-blue-400 hover:text-blue-300">Retry</button>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="p-8 text-center text-slate-400">
+        No entries in the queue.
+      </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function cancelEntry(id) {
+  if (!confirm('Cancel this queue entry?')) return;
+  const r = await fetch(`/api/queue/${id}`, {method: 'DELETE'});
+  if (r.ok) {
+    location.reload();
+  } else {
+    alert('Failed to cancel entry');
+  }
+}
+
+async function retryEntry(id) {
+  const r = await fetch(`/api/queue/${id}/retry`, {method: 'POST'});
+  if (r.ok) {
+    location.reload();
+  } else {
+    alert('Failed to retry entry');
+  }
+}
+
+// SSE: listen for queue events and refresh the table
+document.addEventListener('DOMContentLoaded', () => {
+  if (window.EventSource) {
+    const evtSource = new EventSource('/api/events');
+    evtSource.addEventListener('scan.queued',   () => location.reload());
+    evtSource.addEventListener('scan.dequeued', () => location.reload());
+    evtSource.addEventListener('scan.retried',  () => location.reload());
+    evtSource.addEventListener('schedule.fired',() => location.reload());
+    evtSource.onerror = () => { /* silently reconnect */ };
+  }
+});
+</script>
+{% endblock %}
+

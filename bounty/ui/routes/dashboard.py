@@ -27,6 +27,7 @@ async def dashboard_stats(
         "open_findings": 0,
         "findings_by_severity": {},
         "live_secrets": 0,
+        "queue_depth": 0,
     }
 
     async with get_conn(db_path) as conn:
@@ -53,6 +54,15 @@ async def dashboard_stats(
         )
         row = await cur.fetchone()
         stats["live_secrets"] = row[0] if row else 0
+
+        try:
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM scan_queue WHERE status IN ('queued','running')"
+            )
+            row = await cur.fetchone()
+            stats["queue_depth"] = row[0] if row else 0
+        except Exception:  # noqa: BLE001
+            stats["queue_depth"] = 0
 
     return JSONResponse(stats)
 

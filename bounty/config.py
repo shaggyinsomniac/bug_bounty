@@ -152,6 +152,13 @@ class Settings(BaseSettings):
     nuclei_total_time_budget: int = 1800
     """Total Nuclei time budget for an entire scan in seconds (default 30 min)."""
 
+    # --------------------------------------------------------- scheduler / queue
+    scheduler_test_mode: bool = False
+    """Disable real APScheduler cron/interval jobs; allow manual trigger_now() in tests."""
+
+    max_concurrent_scans: int = 2
+    """Maximum number of scans the QueueWorker may run simultaneously."""
+
     # --------------------------------------------------------- validators
     @field_validator("default_intensity")
     @classmethod

@@ -345,3 +345,37 @@ Tests use `tmp_path`-isolated SQLite and `httpx.ASGITransport` — no live HTTP.
 | 7.2 | Done | Web UI shell, dashboard, scans list/detail |
 | 7.3 | Done | Assets + Findings full pages, evidence viewer |
 | 7.4 | Done | Programs UI, report builder, command palette, settings |
+| 8   | Done | Scheduler / Queue (recurring scans, async worker) |
+---
+## Scheduler / Queue
+Phase 8 added a persistent scan scheduler and async queue worker.
+### Schedule management
+```bash
+# Add a recurring schedule (interval-based)
+bounty schedule add --program manual:hackerone.com --name nightly \
+    --interval-minutes 1440 --intensity gentle
+# Add a cron-based schedule
+bounty schedule add --program h1:shopify --name weekly \
+    --cron "0 2 * * 0" --intensity normal
+# List all schedules
+bounty schedule list
+# Remove a schedule
+bounty schedule rm <SCHEDULE_ID>
+# Enable / disable without deleting
+bounty schedule enable  <SCHEDULE_ID>
+bounty schedule disable <SCHEDULE_ID>
+```
+### Queue management
+```bash
+# List current queue (all statuses)
+bounty queue list
+# Cancel a queued or running entry
+bounty queue cancel <ENTRY_ID>
+# Re-enqueue a failed entry
+bounty queue retry <ENTRY_ID>
+```
+### Worker behaviour
+- The queue worker starts automatically when `bounty serve` is launched.
+- Default maximum concurrent scans: **2** (controlled by `SCHEDULER_MAX_CONCURRENT` env var).
+- Failed entries are retried up to 3 times with decreasing priority before being marked `failed`.
+- Schedules fire via APScheduler (interval or cron triggers) and push entries into `scan_queue`.

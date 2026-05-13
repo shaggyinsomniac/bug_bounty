@@ -43,8 +43,9 @@ templates: Jinja2Templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Startup: initialise DB, start SSE relay.  Shutdown: cancel relay, flush bus."""
+    """Startup: initialise DB, start SSE relay, scheduler, and queue worker."""
     from bounty.config import get_settings
+    from bounty.scheduler import QueueWorker, ScanQueue, SchedulerService
     from bounty.ui.sse import sse_manager
 
     settings = get_settings()
@@ -57,13 +58,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Start SSE event relay
     relay_task: asyncio.Task[None] = asyncio.create_task(sse_manager.event_relay())
-    # Yield control so the relay task runs until its first await (subscribes to bus).
     await asyncio.sleep(0)
     log.info("sse_relay_started")
+
+    # Scheduler + worker
+    queue = ScanQueue(settings.db_path)
+    worker = QueueWorker(
+        db_path=settings.db_path,
+        settings=settings,
+        queue=queue,
+        max_concurrent=getattr(settings, "max_concurrent_scans", 2),
+    )
+    scheduler = SchedulerService(db_path=settings.db_path, settings=settings, queue=queue)
+    await scheduler.start()
+    worker_task: asyncio.Task[None] = asyncio.create_task(worker.run())
+    await asyncio.sleep(0)
+    log.info("scheduler_and_worker_started")
+
+    # Expose on app.state for routes to access
+    app.state.queue = queue
+    app.state.scheduler = scheduler
+    app.state.worker = worker
 
     yield
 
     # Graceful shutdown
+    await scheduler.stop()
+    await worker.stop(timeout=30.0)
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
+
     relay_task.cancel()
     try:
         await relay_task

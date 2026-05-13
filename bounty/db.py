@@ -872,6 +872,43 @@ ALTER TABLE findings ADD COLUMN source TEXT NOT NULL DEFAULT 'native';
 COMMIT;
 """
 
+_MIGRATION_V11 = """
+BEGIN TRANSACTION;
+
+CREATE TABLE IF NOT EXISTS scan_schedules (
+    id               TEXT PRIMARY KEY,
+    program_id       TEXT REFERENCES programs(id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    cron_expression  TEXT,
+    interval_minutes INTEGER,
+    intensity        TEXT NOT NULL DEFAULT 'gentle',
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    last_run_at      TEXT,
+    next_run_at      TEXT,
+    created_at       TEXT,
+    updated_at       TEXT,
+    UNIQUE(program_id, name),
+    CHECK(cron_expression IS NOT NULL OR interval_minutes IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS scan_queue (
+    id            TEXT PRIMARY KEY,
+    program_id    TEXT,
+    intensity     TEXT NOT NULL DEFAULT 'gentle',
+    priority      INTEGER NOT NULL DEFAULT 100,
+    status        TEXT NOT NULL DEFAULT 'queued',
+    reason        TEXT,
+    submitted_at  TEXT,
+    started_at    TEXT,
+    finished_at   TEXT,
+    scan_id       TEXT,
+    error_message TEXT,
+    retry_count   INTEGER NOT NULL DEFAULT 0
+);
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
     _MIGRATION_V1,
     # v2 → add leads table for intel / Shodan triage.
@@ -900,6 +937,8 @@ _MIGRATIONS: list[str] = [
     #   'native' = detected by bounty's own Detection classes.
     #   'nuclei' = detected by the Nuclei subprocess scanner.
     _MIGRATION_V10,
+    # v11 (Phase 8) → add scan_schedules and scan_queue tables.
+    _MIGRATION_V11,
 ]
 
 
