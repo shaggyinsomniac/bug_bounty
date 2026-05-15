@@ -52,6 +52,49 @@ class Settings(BaseSettings):
     discord_webhook_secrets: str = ""
     """Discord webhook URL for live-secret alerts.  Empty string = disabled."""
 
+    # --------------------------------------------------------- Phase 9 integrations
+    discord_webhook_url: str | None = None
+    """Discord webhook URL for integration notifier (Phase 9)."""
+
+    slack_webhook_url: str | None = None
+    """Slack incoming webhook URL for integration notifier."""
+
+    discord_severity_threshold: str = "high"
+    """Minimum severity to trigger Discord notifications (critical/high/medium/low/info)."""
+
+    slack_severity_threshold: str = "high"
+    """Minimum severity to trigger Slack notifications."""
+
+    jira_base_url: str | None = None
+    """Jira instance base URL, e.g. https://myorg.atlassian.net"""
+
+    jira_email: str | None = None
+    """Jira account email for Basic Auth."""
+
+    jira_api_token: str | None = None
+    """Jira API token."""
+
+    jira_project_key: str | None = None
+    """Jira project key, e.g. BUG."""
+
+    jira_severity_threshold: str = "critical"
+    """Minimum severity to create Jira issues."""
+
+    linear_api_token: str | None = None
+    """Linear personal API token."""
+
+    linear_team_id: str | None = None
+    """Linear team ID (UUID)."""
+
+    linear_severity_threshold: str = "critical"
+    """Minimum severity to create Linear issues."""
+
+    notification_quiet_start: str | None = None
+    """Quiet hours start time in HH:MM (UTC).  None = disabled."""
+
+    notification_quiet_end: str | None = None
+    """Quiet hours end time in HH:MM (UTC).  None = disabled."""
+
     # ----------------------------------------------------- HTTP / scan tuning
     http_timeout: float = 15.0
     """Default per-request timeout in seconds for recon/validation HTTP calls."""

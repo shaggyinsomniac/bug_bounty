@@ -58,56 +58,171 @@
   </div>
 
   <!-- Tab: Integrations -->
-  <div x-show="tab === 'integrations'" class="space-y-4">
-    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-6">
-      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Integrations</h2>
+  <div x-show="tab === 'integrations'" class="space-y-4" x-data="integrationSettings()">
 
-      <!-- Shodan -->
-      <div class="flex items-center justify-between py-2 border-b border-slate-700">
-        <div>
-          <div class="text-sm font-medium text-slate-200">Shodan API Key</div>
-          <div class="text-xs text-slate-400">Required for intel / attack surface discovery</div>
+    <!-- Status banner -->
+    <div x-show="toast.msg" x-transition
+         :class="toast.type === 'success' ? 'bg-green-900 border-green-700 text-green-200' : 'bg-red-900 border-red-700 text-red-200'"
+         class="border rounded-lg px-4 py-3 text-sm font-medium mb-2" x-text="toast.msg"></div>
+
+    <!-- ---- Discord ---- -->
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-4">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Discord</h2>
+
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">Webhook URL</label>
+          <input x-model="discord.webhook_url" type="text" placeholder="https://discord.com/api/webhooks/..."
+                 class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
         </div>
-        <div class="flex items-center gap-3">
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
-                       {% if shodan_configured %}bg-green-900 text-green-300{% else %}bg-red-900 text-red-300{% endif %}">
-            {% if shodan_configured %}✓ Configured{% else %}✗ Not set{% endif %}
-          </span>
-          <button onclick="document.getElementById('shodan-modal').showModal()"
-                  class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-slate-200 text-sm rounded transition-colors">
-            Set Key
-          </button>
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">Severity Threshold</label>
+          <select x-model="discord.threshold"
+                  class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <template x-for="s in severities" :key="s">
+              <option :value="s" x-text="s.charAt(0).toUpperCase() + s.slice(1)"></option>
+            </template>
+          </select>
         </div>
       </div>
-
-      <!-- Discord Webhook: Findings -->
-      <div class="flex items-center justify-between py-2 border-b border-slate-700">
-        <div>
-          <div class="text-sm font-medium text-slate-200">Discord Webhook — Findings</div>
-          <div class="text-xs text-slate-500 font-mono truncate max-w-xs">
-            {{ discord_webhook_findings if discord_webhook_findings else '(not configured)' }}
-          </div>
-        </div>
-        <button onclick="document.getElementById('discord-findings-modal').showModal()"
-                class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-slate-200 text-sm rounded transition-colors">
-          Configure
+      <div class="flex gap-3 pt-2">
+        <button @click="saveIntegrations()"
+                class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">
+          Save
         </button>
-      </div>
-
-      <!-- Discord Webhook: Secrets -->
-      <div class="flex items-center justify-between py-2">
-        <div>
-          <div class="text-sm font-medium text-slate-200">Discord Webhook — Live Secrets</div>
-          <div class="text-xs text-slate-500 font-mono truncate max-w-xs">
-            {{ discord_webhook_secrets if discord_webhook_secrets else '(not configured)' }}
-          </div>
-        </div>
-        <button onclick="document.getElementById('discord-secrets-modal').showModal()"
-                class="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-slate-200 text-sm rounded transition-colors">
-          Configure
+        <button @click="testIntegration('discord')"
+                class="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-slate-200 text-sm rounded transition-colors">
+          Test Discord
         </button>
       </div>
     </div>
+
+    <!-- ---- Slack ---- -->
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-4">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Slack</h2>
+
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">Webhook URL</label>
+          <input x-model="slack.webhook_url" type="text" placeholder="https://hooks.slack.com/services/..."
+                 class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+        </div>
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">Severity Threshold</label>
+          <select x-model="slack.threshold"
+                  class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <template x-for="s in severities" :key="s">
+              <option :value="s" x-text="s.charAt(0).toUpperCase() + s.slice(1)"></option>
+            </template>
+          </select>
+        </div>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button @click="saveIntegrations()"
+                class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">Save</button>
+        <button @click="testIntegration('slack')"
+                class="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-slate-200 text-sm rounded transition-colors">Test Slack</button>
+      </div>
+    </div>
+
+    <!-- ---- Jira ---- -->
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-4">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Jira</h2>
+
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">Base URL</label>
+          <input x-model="jira.base_url" type="text" placeholder="https://myorg.atlassian.net"
+                 class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+        </div>
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">Email</label>
+          <input x-model="jira.email" type="email" placeholder="you@example.com"
+                 class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+        </div>
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">API Token</label>
+          <input x-model="jira.api_token" type="password" placeholder="Jira API token"
+                 class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+        </div>
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">Project Key</label>
+          <input x-model="jira.project_key" type="text" placeholder="BUG"
+                 class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+        </div>
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">Severity Threshold</label>
+          <select x-model="jira.threshold"
+                  class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <template x-for="s in severities" :key="s">
+              <option :value="s" x-text="s.charAt(0).toUpperCase() + s.slice(1)"></option>
+            </template>
+          </select>
+        </div>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button @click="saveIntegrations()"
+                class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">Save</button>
+        <button @click="testIntegration('jira')"
+                class="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-slate-200 text-sm rounded transition-colors">Test Jira</button>
+      </div>
+    </div>
+
+    <!-- ---- Linear ---- -->
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-4">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Linear</h2>
+
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">API Token</label>
+          <input x-model="linear.api_token" type="password" placeholder="lin_api_..."
+                 class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+        </div>
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">Team ID</label>
+          <input x-model="linear.team_id" type="text" placeholder="UUID"
+                 class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+        </div>
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">Severity Threshold</label>
+          <select x-model="linear.threshold"
+                  class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <template x-for="s in severities" :key="s">
+              <option :value="s" x-text="s.charAt(0).toUpperCase() + s.slice(1)"></option>
+            </template>
+          </select>
+        </div>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button @click="saveIntegrations()"
+                class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">Save</button>
+        <button @click="testIntegration('linear')"
+                class="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-slate-200 text-sm rounded transition-colors">Test Linear</button>
+      </div>
+    </div>
+
+    <!-- ---- Quiet Hours ---- -->
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-4">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Notification Quiet Hours (UTC)</h2>
+      <p class="text-xs text-slate-400">Suppress all notifications during these hours. Leave blank to disable.</p>
+
+      <div class="flex items-center gap-4">
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">Start</label>
+          <input x-model="quiet.start" type="time"
+                 class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <span class="text-slate-400 mt-5">–</span>
+        <div class="space-y-1">
+          <label class="block text-xs text-slate-400">End</label>
+          <input x-model="quiet.end" type="time"
+                 class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+      </div>
+      <button @click="saveIntegrations()"
+              class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">Save Quiet Hours</button>
+    </div>
+
   </div>
 
   <!-- Tab: Notifications -->
@@ -255,6 +370,67 @@ fetch('/api/system/info')
       el.textContent = `bounty ${d.bounty_version} · FastAPI ${d.fastapi_version} · Python ${(d.python_version || '').split(' ')[0]}`;
     }
   }).catch(() => {});
+
+function integrationSettings() {
+  return {
+    severities: ['critical', 'high', 'medium', 'low', 'info'],
+    toast: { msg: '', type: 'success' },
+    discord: { webhook_url: '', threshold: 'high' },
+    slack:   { webhook_url: '', threshold: 'high' },
+    jira:    { base_url: '', email: '', api_token: '', project_key: '', threshold: 'critical' },
+    linear:  { api_token: '', team_id: '', threshold: 'critical' },
+    quiet:   { start: '', end: '' },
+
+    showToast(msg, type = 'success') {
+      this.toast = { msg, type };
+      setTimeout(() => { this.toast.msg = ''; }, 5000);
+    },
+
+    async saveIntegrations() {
+      const body = {
+        discord_webhook_url: this.discord.webhook_url || null,
+        discord_severity_threshold: this.discord.threshold,
+        slack_webhook_url: this.slack.webhook_url || null,
+        slack_severity_threshold: this.slack.threshold,
+        jira_base_url: this.jira.base_url || null,
+        jira_email: this.jira.email || null,
+        jira_api_token: this.jira.api_token || null,
+        jira_project_key: this.jira.project_key || null,
+        jira_severity_threshold: this.jira.threshold,
+        linear_api_token: this.linear.api_token || null,
+        linear_team_id: this.linear.team_id || null,
+        linear_severity_threshold: this.linear.threshold,
+        notification_quiet_start: this.quiet.start || null,
+        notification_quiet_end: this.quiet.end || null,
+      };
+      try {
+        const r = await fetch('/api/settings/integrations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (r.ok) {
+          this.showToast('Settings saved (restart required for full effect)', 'success');
+        } else {
+          const err = await r.json().catch(() => ({}));
+          this.showToast('Failed: ' + (err.detail || r.status), 'error');
+        }
+      } catch(e) { this.showToast('Network error', 'error'); }
+    },
+
+    async testIntegration(platform) {
+      try {
+        const r = await fetch(`/api/integrations/test/${platform}`, { method: 'POST' });
+        if (r.ok) {
+          this.showToast(`✓ ${platform} test succeeded`, 'success');
+        } else {
+          const err = await r.json().catch(() => ({}));
+          this.showToast(`✗ ${platform} test failed: ` + (err.detail || r.status), 'error');
+        }
+      } catch(e) { this.showToast('Network error', 'error'); }
+    },
+  };
+}
 
 async function saveApiKey(key, inputId, modalId) {
   const val = document.getElementById(inputId).value.trim();

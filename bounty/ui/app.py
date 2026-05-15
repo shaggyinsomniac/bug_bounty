@@ -80,7 +80,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.scheduler = scheduler
     app.state.worker = worker
 
+    # Start integrations subscriber (Phase 9)
+    from bounty.integrations import start_integrations
+    integrations_task: asyncio.Task[None] = asyncio.create_task(
+        start_integrations(settings)
+    )
+    await asyncio.sleep(0)
+    log.info("integrations_started")
+
     yield
+
+    # Graceful shutdown
+    integrations_task.cancel()
+    try:
+        await integrations_task
+    except asyncio.CancelledError:
+        pass
 
     # Graceful shutdown
     await scheduler.stop()
