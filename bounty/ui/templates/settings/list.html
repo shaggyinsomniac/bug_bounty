@@ -9,7 +9,7 @@
 
   <!-- Tab bar -->
   <div class="flex gap-1 bg-slate-800 border border-slate-700 rounded-lg p-1 w-fit">
-    {% for tid, tlabel in [('general', 'General'), ('integrations', 'Integrations'), ('notifications', 'Notifications'), ('system', 'System')] %}
+    {% for tid, tlabel in [('general', 'General'), ('scanner', 'Scanner'), ('integrations', 'Integrations'), ('notifications', 'Notifications'), ('system', 'System')] %}
       <button @click="tab = '{{ tid }}'"
               :class="tab === '{{ tid }}' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'"
               class="px-4 py-1.5 rounded text-sm font-medium transition-colors">
@@ -54,6 +54,73 @@
           {{ default_intensity | title }}
         </span>
       </div>
+    </div>
+  </div>
+
+  <!-- Tab: Scanner -->
+  <div x-show="tab === 'scanner'" class="space-y-4">
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-6">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Scanner Stealth &amp; Rate Limiting</h2>
+
+      <div class="flex items-center justify-between py-2 border-b border-slate-700">
+        <div>
+          <div class="text-sm font-medium text-slate-200">Adaptive Rate Limiting</div>
+          <div class="text-xs text-slate-400">Back off on 429/403 responses, recover on success</div>
+        </div>
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                     {% if adaptive_rate_enabled %}bg-green-900 text-green-300{% else %}bg-slate-700 text-slate-400{% endif %}">
+          {% if adaptive_rate_enabled %}✓ Enabled{% else %}✗ Disabled{% endif %}
+        </span>
+      </div>
+
+      <div class="flex items-center justify-between py-2 border-b border-slate-700">
+        <div>
+          <div class="text-sm font-medium text-slate-200">Request Jitter</div>
+          <div class="text-xs text-slate-400">±30% random variance on inter-request delays to break robotic timing</div>
+        </div>
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                     {% if stealth_jitter_enabled %}bg-green-900 text-green-300{% else %}bg-slate-700 text-slate-400{% endif %}">
+          {% if stealth_jitter_enabled %}✓ Enabled{% else %}✗ Disabled{% endif %}
+        </span>
+      </div>
+
+      <div class="flex items-center justify-between py-2 border-b border-slate-700">
+        <div>
+          <div class="text-sm font-medium text-slate-200">Daily Request Budget per Host</div>
+          <div class="text-xs text-slate-400">Max requests per host per scan run before treating as blocked</div>
+        </div>
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-700 text-slate-300">
+          {{ daily_request_budget_per_host | default(5000) }}
+        </span>
+      </div>
+
+      <div class="flex items-center justify-between py-2">
+        <div>
+          <div class="text-sm font-medium text-slate-200">HTTP Proxy URL</div>
+          <div class="text-xs text-slate-400">
+            Route scanner traffic through a proxy. Supports <code class="font-mono">http://</code>,
+            <code class="font-mono">https://</code>, <code class="font-mono">socks5://</code>.
+            <br>Set via <code class="font-mono">HTTP_PROXY_URL</code> env var.
+            Tor (<code class="font-mono">socks5://127.0.0.1:9050</code>) works but is slow.
+          </div>
+        </div>
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                     {% if http_proxy_url %}bg-blue-900 text-blue-300{% else %}bg-slate-700 text-slate-400{% endif %}">
+          {% if http_proxy_url %}{{ http_proxy_url }}{% else %}Not configured{% endif %}
+        </span>
+      </div>
+    </div>
+
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-3">Configure via Environment Variables</h2>
+      <dl class="space-y-2 text-xs font-mono text-slate-300">
+        <div><dt class="text-slate-500 inline">ADAPTIVE_RATE_ENABLED=</dt><dd class="inline">true|false</dd></div>
+        <div><dt class="text-slate-500 inline">STEALTH_JITTER_ENABLED=</dt><dd class="inline">true|false</dd></div>
+        <div><dt class="text-slate-500 inline">DAILY_REQUEST_BUDGET_PER_HOST=</dt><dd class="inline">5000</dd></div>
+        <div><dt class="text-slate-500 inline">HTTP_PROXY_URL=</dt><dd class="inline">socks5://127.0.0.1:9050</dd></div>
+        <div><dt class="text-slate-500 inline">PROXY_ROTATION_URLS=</dt><dd class="inline">http://p1:8080,http://p2:8080</dd></div>
+      </dl>
+      <p class="mt-3 text-xs text-slate-500">Changes take effect on server restart.</p>
     </div>
   </div>
 

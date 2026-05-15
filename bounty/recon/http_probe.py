@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import ssl
 import time
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
@@ -30,6 +31,10 @@ import httpx
 from bounty import get_logger
 from bounty.config import get_settings
 from bounty.models import ProbeResult, TLSInfo
+from bounty.recon.stealth import get_rotating_ua, jitter
+
+if TYPE_CHECKING:
+    from bounty.recon.rate_manager import AdaptiveRateManager
 
 log = get_logger(__name__)
 
@@ -142,6 +147,32 @@ def _build_curl_cmd(request: httpx.Request) -> str:
     return " ".join(parts)
 
 
+def _select_proxy(host: str, settings: object) -> str | None:
+    """Determine the proxy URL to use for *host*.
+
+    Rotation logic mirrors UA rotation: deterministic per-host selection so
+    the same host always routes through the same proxy.
+
+    Args:
+        host:     Bare hostname (no scheme/port).
+        settings: Application settings object.
+
+    Returns:
+        A proxy URL string or ``None`` if no proxy is configured.
+    """
+    import hashlib as _hashlib
+
+    proxy_rotation_urls: list[str] = getattr(settings, "proxy_rotation_urls", [])
+    http_proxy_url: str | None = getattr(settings, "http_proxy_url", None)
+
+    if proxy_rotation_urls:
+        digest = int(_hashlib.md5(host.encode(), usedforsecurity=False).hexdigest(), 16)
+        return proxy_rotation_urls[digest % len(proxy_rotation_urls)]
+    if http_proxy_url:
+        return http_proxy_url
+    return None
+
+
 async def probe(
     url: str,
     *,
@@ -149,6 +180,7 @@ async def probe(
     headers: dict[str, str] | None = None,
     follow_redirects: bool = True,
     verify: bool = True,
+    rate_manager: AdaptiveRateManager | None = None,
 ) -> ProbeResult:
     """Probe a single URL and return a structured result.
 
@@ -165,6 +197,10 @@ async def probe(
                           ``True``.
         verify: Whether to verify TLS certificates.  Set to ``False`` to
                 probe self-signed hosts.  Defaults to ``True``.
+        rate_manager: Optional :class:`AdaptiveRateManager` instance.  When
+                      supplied, the probe applies per-host jitter delays,
+                      records each response for adaptive back-off, and skips
+                      the request entirely if the host is already blocked.
 
     Returns:
         A ``ProbeResult`` — always returned, never raises.  Check ``.ok``
@@ -172,106 +208,152 @@ async def probe(
     """
     settings = get_settings()
     effective_timeout = timeout if timeout is not None else settings.http_timeout
-    # Bug bounty programs accept browser-like UAs; identifiable scanner UAs
-    # get blocked by WAFs and reduce coverage.  Override via settings.user_agent.
+
+    parsed = urlparse(url)
+    host = parsed.hostname or url
+
+    # ── Blocked-host guard ────────────────────────────────────────────────────
+    if rate_manager is not None and rate_manager.is_blocked(host):
+        log.warning("probe_skipped_host_blocked", url=url, host=host)
+        return _error_result(url, f"Host {host} is blocked by rate manager", 0.0)
+
+    # ── Rotating UA ───────────────────────────────────────────────────────────
+    # Use a deterministic per-host UA so one host always sees the same browser;
+    # different hosts see different UAs.  Falls back to settings.user_agent if
+    # stealth module is unavailable.
+    effective_ua = get_rotating_ua(host)
+
     effective_headers = {
-        "User-Agent": settings.user_agent,
+        "User-Agent": effective_ua,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
     }
     if headers:
         effective_headers.update(headers)
 
+    # ── Pre-request jitter delay ─────────────────────────────────────────────
+    if rate_manager is not None and settings.adaptive_rate_enabled:
+        base_delay = rate_manager.get_delay(host)
+        if base_delay > 0:
+            actual_delay = jitter(base_delay) if settings.stealth_jitter_enabled else base_delay
+            if actual_delay > 0:
+                await asyncio.sleep(actual_delay)
+    elif settings.stealth_jitter_enabled:
+        # Even without a rate_manager, apply a tiny baseline jitter (0 base = 0 sleep)
+        pass
+
+    # ── Proxy selection ───────────────────────────────────────────────────────
+    proxy: str | None = _select_proxy(host, settings)
+
     sem = await _get_semaphore(url)
 
     async with sem:
         t0 = time.monotonic()
         try:
-            async with httpx.AsyncClient(
+            client_kwargs: dict[str, object] = dict(
                 follow_redirects=follow_redirects,
                 max_redirects=_MAX_REDIRECTS,
                 timeout=httpx.Timeout(effective_timeout),
                 verify=verify,
                 http2=True,
                 headers=effective_headers,
-            ) as client:
-                async with client.stream("GET", url) as response:
-                    # Bounded streaming read — caps memory use at
-                    # settings.max_response_bytes (default 5 MB).
-                    max_bytes = settings.max_response_bytes
-                    body_buf = bytearray()
-                    body_truncated = False
-                    async for chunk in response.aiter_bytes(chunk_size=65536):
-                        body_buf.extend(chunk)
-                        if len(body_buf) >= max_bytes:
-                            body_truncated = True
-                            break
-                    body = bytes(body_buf)
-                    body_text = body.decode("utf-8", errors="replace")
+            )
+            if proxy:
+                client_kwargs["proxy"] = proxy
 
+            async with httpx.AsyncClient(**client_kwargs) as client:  # type: ignore[arg-type]
+                try:
+                    async with client.stream("GET", url) as response:
+                        # Bounded streaming read — caps memory use at
+                        # settings.max_response_bytes (default 5 MB).
+                        max_bytes = settings.max_response_bytes
+                        body_buf = bytearray()
+                        body_truncated = False
+                        async for chunk in response.aiter_bytes(chunk_size=65536):
+                            body_buf.extend(chunk)
+                            if len(body_buf) >= max_bytes:
+                                body_truncated = True
+                                break
+                        body = bytes(body_buf)
+                        body_text = body.decode("utf-8", errors="replace")
+
+                        elapsed_ms = (time.monotonic() - t0) * 1000
+
+                        # Build redirect chain from history.
+                        redirect_chain = [str(r.url) for r in response.history]
+
+                        # Try to get TLS info from the underlying transport.
+                        tls: TLSInfo | None = None
+                        try:
+                            transport = getattr(client, "_transport", None)
+                            ssl_object: ssl.SSLObject | None = None
+                            if transport is not None:
+                                conn = getattr(transport, "_pool", None)
+                                if conn is not None:
+                                    for connection in getattr(conn, "_connections", []):
+                                        sock = getattr(connection, "_ssl_object", None)
+                                        if sock is not None:
+                                            ssl_object = sock
+                                            break
+                            tls = _extract_tls(ssl_object)
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                        # Attempt to resolve the IP from the transport.
+                        ip: str | None = None
+                        try:
+                            network_stream = response.extensions.get("network_stream")
+                            if network_stream is not None:
+                                raw_addr = network_stream.get_extra_info("server_addr")
+                                if raw_addr:
+                                    ip = raw_addr[0]
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                        # Normalise headers to a flat dict (last-wins for duplicates).
+                        flat_headers: dict[str, str] = dict(response.headers)
+
+                        final_url = str(response.url)
+
+                        # ── Post-response rate tracking ───────────────────────
+                        if rate_manager is not None and settings.adaptive_rate_enabled:
+                            retry_after = flat_headers.get("retry-after") or flat_headers.get("Retry-After")
+                            await rate_manager.record_response(
+                                host, response.status_code, retry_after
+                            )
+                            if rate_manager.is_blocked(host):
+                                log.warning(
+                                    "probe_host_now_blocked",
+                                    url=url,
+                                    host=host,
+                                    status=response.status_code,
+                                )
+
+                        log.debug(
+                            "probe_ok",
+                            url=url,
+                            final_url=final_url,
+                            status=response.status_code,
+                            elapsed_ms=round(elapsed_ms, 1),
+                            body_truncated=body_truncated,
+                        )
+                        return ProbeResult(
+                            url=url,
+                            final_url=final_url,
+                            status_code=response.status_code,
+                            headers=flat_headers,
+                            body=body,
+                            body_text=body_text,
+                            redirect_chain=redirect_chain,
+                            tls=tls,
+                            ip=ip,
+                            elapsed_ms=elapsed_ms,
+                            body_truncated=body_truncated,
+                        )
+                except httpx.ProxyError as exc:
                     elapsed_ms = (time.monotonic() - t0) * 1000
-
-                    # Build redirect chain from history.
-                    redirect_chain = [str(r.url) for r in response.history]
-
-                    # Try to get TLS info from the underlying transport.
-                    tls: TLSInfo | None = None
-                    try:
-                        stream = response.stream
-                        # httpx exposes ssl_object via the underlying transport
-                        transport = getattr(client, "_transport", None)
-                        ssl_object: ssl.SSLObject | None = None
-                        if transport is not None:
-                            conn = getattr(transport, "_pool", None)
-                            if conn is not None:
-                                # Attempt to reach the SSL socket — best effort.
-                                for connection in getattr(conn, "_connections", []):
-                                    sock = getattr(connection, "_ssl_object", None)
-                                    if sock is not None:
-                                        ssl_object = sock
-                                        break
-                        tls = _extract_tls(ssl_object)
-                    except Exception:  # noqa: BLE001
-                        pass
-
-                    # Attempt to resolve the IP from the transport.
-                    ip: str | None = None
-                    try:
-                        # httpx does not expose the remote IP directly; fall back
-                        # to the response extensions if available.
-                        network_stream = response.extensions.get("network_stream")
-                        if network_stream is not None:
-                            raw_addr = network_stream.get_extra_info("server_addr")
-                            if raw_addr:
-                                ip = raw_addr[0]
-                    except Exception:  # noqa: BLE001
-                        pass
-
-                    # Normalise headers to a flat dict (last-wins for duplicates).
-                    flat_headers: dict[str, str] = dict(response.headers)
-
-                    final_url = str(response.url)
-                    log.debug(
-                        "probe_ok",
-                        url=url,
-                        final_url=final_url,
-                        status=response.status_code,
-                        elapsed_ms=round(elapsed_ms, 1),
-                        body_truncated=body_truncated,
-                    )
-                    return ProbeResult(
-                        url=url,
-                        final_url=final_url,
-                        status_code=response.status_code,
-                        headers=flat_headers,
-                        body=body,
-                        body_text=body_text,
-                        redirect_chain=redirect_chain,
-                        tls=tls,
-                        ip=ip,
-                        elapsed_ms=elapsed_ms,
-                        body_truncated=body_truncated,
-                    )
+                    log.warning("probe_proxy_error", url=url, proxy=proxy, error=str(exc))
+                    return _error_result(url, f"Proxy error: {exc}", elapsed_ms)
 
         except httpx.TooManyRedirects as exc:
             elapsed_ms = (time.monotonic() - t0) * 1000

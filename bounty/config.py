@@ -202,6 +202,25 @@ class Settings(BaseSettings):
     max_concurrent_scans: int = 2
     """Maximum number of scans the QueueWorker may run simultaneously."""
 
+    # --------------------------------------------------------- stealth / rate limiting
+    daily_request_budget_per_host: int = 5000
+    """Maximum HTTP requests per host per scan run before treating the host as blocked."""
+
+    http_proxy_url: str | None = None
+    """Optional proxy URL for all HTTP probe requests.  Supports http/https/socks5.
+    Example: ``socks5://127.0.0.1:9050`` (Tor) or ``http://user:pass@proxy:8080``.
+    Note: Tor works but is slow and often blocked; residential proxies are better."""
+
+    proxy_rotation_urls: list[str] = Field(default_factory=list)
+    """Multiple proxy URLs to rotate per-host (deterministic, like UA rotation).
+    When set, ``http_proxy_url`` is ignored and proxies are chosen via host hash."""
+
+    stealth_jitter_enabled: bool = True
+    """Add ±30 % random jitter to inter-request delays to break robotic timing."""
+
+    adaptive_rate_enabled: bool = True
+    """Enable the adaptive per-host rate manager (back-off on 429/403, recover on success)."""
+
     # --------------------------------------------------------- validators
     @field_validator("default_intensity")
     @classmethod

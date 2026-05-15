@@ -65,6 +65,11 @@
     <div class="mt-4 flex gap-6 text-sm text-slate-400">
       <span>🖥️ <strong class="text-slate-100">{{ scan.asset_count | default(0) }}</strong> assets</span>
       <span>🐛 <strong class="text-slate-100">{{ scan.finding_count_live | default(0) }}</strong> findings</span>
+      {% if scan.blocked_hosts is defined and scan.blocked_hosts > 0 %}
+        <span class="text-amber-400">🚫 <strong class="text-amber-300">{{ scan.blocked_hosts }}</strong> blocked host{{ 's' if scan.blocked_hosts != 1 else '' }}</span>
+      {% elif scan.blocked_hosts is defined %}
+        <span>🚫 <strong class="text-slate-100">0</strong> blocked hosts</span>
+      {% endif %}
     </div>
   </div>
 
@@ -150,6 +155,22 @@ async function cancelScan(scanId) {
     toast('Error: ' + e.message, 'error');
   }
 }
+
+// Listen for scan.host_blocked SSE events and surface as toast
+(function () {
+  const scanId = '{{ scan.id }}';
+  const evtSrc = new EventSource('/api/sse');
+  evtSrc.addEventListener('scan.host_blocked', function (e) {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.scan_id === scanId) {
+        toast('⚠️ Host blocked by WAF/rate-limit: ' + d.host, 'warning');
+      }
+    } catch (_) {}
+  });
+  // Clean up when navigating away
+  window.addEventListener('beforeunload', () => evtSrc.close());
+})();
 </script>
 {% endblock %}
 

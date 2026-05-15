@@ -42,6 +42,7 @@ from bounty.models import Asset, Target
 from bounty.recon.http_probe import probe
 from bounty.recon.ip_ranges import expand_asn, expand_cidr
 from bounty.recon.port_scan import OpenPort, scan_ports
+from bounty.recon.rate_manager import AdaptiveRateManager
 from bounty.recon.resolve import ResolveResult, resolve_batch
 from bounty.recon.subdomains import enumerate as enumerate_subdomains
 from bounty.ulid import make_ulid
@@ -600,7 +601,7 @@ async def recon_pipeline(
     intensity: str = "normal",
     db_path: Path | None = None,
     scan_id: str | None = None,
-) -> dict[str, list[str]]:
+) -> dict[str, Any]:
     """Run the full recon pipeline for a program's in-scope targets.
 
     Phases executed in order:
@@ -641,6 +642,14 @@ async def recon_pipeline(
 
     bound_log = log.bind(program_id=program_id, intensity=intensity, scan_id=scan_id)
     bound_log.info("recon_pipeline_start", targets=len(targets))
+
+    # ── Per-scan adaptive rate manager ───────────────────────────────────────
+    _effective_scan_id = scan_id  # capture for closures
+    rate_manager: AdaptiveRateManager | None = None
+    if settings.adaptive_rate_enabled:
+        rate_manager = AdaptiveRateManager(
+            daily_request_budget_per_host=settings.daily_request_budget_per_host
+        )
 
     # ── Pre-flight: ensure program + scan rows exist in DB ────────────────────
     await _ensure_program(effective_db, program_id)
@@ -851,6 +860,11 @@ async def recon_pipeline(
             ip = resolve_res.primary_ip
             host_log = bound_log.bind(hostname=hostname, ip=ip)
 
+            # Check if already blocked before starting probes for this host
+            if rate_manager is not None and rate_manager.is_blocked(hostname):
+                host_log.warning("probe_host_skipped_blocked", hostname=hostname)
+                return
+
             # Build list of (scheme, port) to probe
             scheme_ports: list[tuple[str, int]] = [("https", 443), ("http", 80)]
 
@@ -862,9 +876,23 @@ async def recon_pipeline(
                         scheme_ports.append((scheme, op.port))
 
             for scheme, port in scheme_ports:
+                # Re-check blocked status between each scheme/port probe
+                if rate_manager is not None and rate_manager.is_blocked(hostname):
+                    host_log.warning(
+                        "probe_host_blocked_mid_scan",
+                        hostname=hostname,
+                        remaining_ports="skipped",
+                    )
+                    await publish(
+                        "scan.host_blocked",
+                        {"host": hostname, "scan_id": _effective_scan_id},
+                        scan_id=_effective_scan_id,
+                    )
+                    break
+
                 url = _asset_url(scheme, hostname, port)
                 probes_completed += 1
-                result = await probe(url, verify=False)
+                result = await probe(url, verify=False, rate_manager=rate_manager)
                 if not result.ok:
                     host_log.debug("probe_failed", url=url, error=result.error)
                     continue
@@ -923,16 +951,23 @@ async def recon_pipeline(
             for scheme, port in scheme_ports:
                 if ip in unreachable_ips:
                     break
+
+                # Re-check blocked status between each probe
+                if rate_manager is not None and rate_manager.is_blocked(ip):
+                    ip_log.warning("probe_ip_blocked_mid_scan", ip=ip)
+                    await publish(
+                        "scan.host_blocked",
+                        {"host": ip, "scan_id": _effective_scan_id},
+                        scan_id=_effective_scan_id,
+                    )
+                    break
+
                 url = _asset_url(scheme, ip, port)
                 probes_completed += 1
-                result = await probe(url, verify=False)
+                result = await probe(url, verify=False, rate_manager=rate_manager)
 
                 if not result.ok:
                     # Fast failure (<3 s) = host is not answering on this port.
-                    # Only mark as unreachable if NO probe has succeeded yet — once
-                    # the IP has responded on any port it is clearly reachable and
-                    # we should not skip remaining ports (e.g. port 8000 after a
-                    # success on 443 and fast-fails on 80/8080).
                     if result.elapsed_ms < 3_000 and ip not in successful_ips:
                         fast_fail_counts[ip] = fast_fail_counts.get(ip, 0) + 1
                         if fast_fail_counts[ip] >= 2:
@@ -982,10 +1017,16 @@ async def recon_pipeline(
             Resolves the hostname for the IP field when host is not already an IP.
             """
             nonlocal probes_completed
+
+            # Check blocked status before probing
+            if rate_manager is not None and rate_manager.is_blocked(host):
+                bound_log.warning("probe_url_host_blocked", host=host)
+                return
+
             url = _asset_url(scheme, host, port)
             url_log = bound_log.bind(url=url, host=host, port=port)
             probes_completed += 1
-            result = await probe(url, verify=False)
+            result = await probe(url, verify=False, rate_manager=rate_manager)
             if not result.ok:
                 url_log.debug("probe_failed", error=result.error)
                 return
@@ -1043,9 +1084,14 @@ async def recon_pipeline(
             unique_assets=len(set(asset_ids)),
             unreachable_ips=len(unreachable_ips),
         )
+        blocked_count = len(rate_manager.blocked_hosts()) if rate_manager is not None else 0
         await _update_scan_phase(
             effective_db, scan_id, "http_probe", "completed",
-            {"probes_completed": probes_completed, "unique_assets": len(set(asset_ids))},
+            {
+                "probes_completed": probes_completed,
+                "unique_assets": len(set(asset_ids)),
+                "blocked_hosts": blocked_count,
+            },
         )
 
         # ── Phase 5: Fingerprinting ───────────────────────────────────────
@@ -1079,12 +1125,18 @@ async def recon_pipeline(
         final_status = "failed" if pipeline_error else "completed"
         await _finish_scan(effective_db, scan_id, final_status, pipeline_error)
 
+    blocked_count = len(rate_manager.blocked_hosts()) if rate_manager is not None else 0
     bound_log.info(
         "recon_pipeline_done",
         probes_completed=probes_completed,
         unique_assets=len(set(asset_ids)),
+        blocked_hosts=blocked_count,
         scan_id=scan_id,
         status="failed" if pipeline_error else "completed",
     )
-    return {"assets": list(dict.fromkeys(asset_ids)), "failed_hosts": []}
+    return {
+        "assets": list(dict.fromkeys(asset_ids)),
+        "failed_hosts": [],
+        "blocked_hosts": blocked_count,
+    }
 

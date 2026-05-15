@@ -937,6 +937,11 @@ async def settings_page(
         "default_intensity": settings.default_intensity,
         "discord_webhook_findings": settings.discord_webhook_findings,
         "discord_webhook_secrets": settings.discord_webhook_secrets,
+        # Scanner / stealth settings
+        "adaptive_rate_enabled": settings.adaptive_rate_enabled,
+        "stealth_jitter_enabled": settings.stealth_jitter_enabled,
+        "daily_request_budget_per_host": settings.daily_request_budget_per_host,
+        "http_proxy_url": settings.http_proxy_url,
     })
 
 
