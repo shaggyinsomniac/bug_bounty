@@ -909,6 +909,33 @@ CREATE TABLE IF NOT EXISTS scan_queue (
 COMMIT;
 """
 
+_MIGRATION_V12 = """
+BEGIN TRANSACTION;
+
+CREATE TABLE IF NOT EXISTS ai_usage (
+    date TEXT PRIMARY KEY,
+    request_count INTEGER NOT NULL DEFAULT 0,
+    cost_estimate REAL NOT NULL DEFAULT 0.0
+);
+
+COMMIT;
+"""
+
+_MIGRATION_V13 = """
+BEGIN TRANSACTION;
+
+-- Metadata index for the filesystem AI response cache.
+-- Actual cached responses live in data/ai_cache/<hash>.json (30-day TTL).
+-- This table lets SQL tooling inspect cache state without touching the filesystem.
+CREATE TABLE IF NOT EXISTS ai_cache (
+    cache_key  TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
     _MIGRATION_V1,
     # v2 → add leads table for intel / Shodan triage.
@@ -939,6 +966,10 @@ _MIGRATIONS: list[str] = [
     _MIGRATION_V10,
     # v11 (Phase 8) → add scan_schedules and scan_queue tables.
     _MIGRATION_V11,
+    # v12 (Phase 10) → add ai_usage table for LLM cost tracking.
+    _MIGRATION_V12,
+    # v13 (Phase 10) → add ai_cache metadata table (actual cache is filesystem).
+    _MIGRATION_V13,
 ]
 
 

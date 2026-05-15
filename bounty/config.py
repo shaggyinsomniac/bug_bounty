@@ -154,6 +154,19 @@ class Settings(BaseSettings):
     asn_resolve_timeout: float = 30.0
     """Timeout in seconds for ASN → CIDR prefix lookups via BGPView API."""
 
+    # --------------------------------------------------------- AI / LLM
+    anthropic_api_key: str = ""
+    """Anthropic API key for LLM-based features.  Empty string = disabled."""
+
+    ai_enabled: bool = True
+    """Enable AI-powered dedup, severity review, and report polish features."""
+
+    ai_daily_cost_cap_usd: float = 5.0
+    """Maximum AI spend (USD) per calendar day.  New requests refused once exceeded."""
+
+    ai_cache_dir: Path = Path("data/ai_cache")
+    """Directory for AI response cache files (filesystem, 30-day TTL)."""
+
     # --------------------------------------------------------- secret scanning
     secret_validation_enabled: bool = True
     """Enable inline secret scanning + token validation during detect phase."""
@@ -232,7 +245,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "data_dir", "tools_dir", "nuclei_templates_dir",
-        "trufflehog_binary_path", "nuclei_binary_path",
+        "trufflehog_binary_path", "nuclei_binary_path", "ai_cache_dir",
         mode="before",
     )
     @classmethod
@@ -267,10 +280,11 @@ class Settings(BaseSettings):
         return Path(__file__).parent / "ui" / "templates"
 
     def ensure_dirs(self) -> None:
-        """Create data, evidence, and intel_cache directories if they do not exist."""
+        """Create data, evidence, intel_cache, and ai_cache directories if they do not exist."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self.intel_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.ai_cache_dir.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

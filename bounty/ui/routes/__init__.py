@@ -7,6 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from bounty.ui.routes import (
+    ai,
     assets,
     dashboard,
     findings,
@@ -41,3 +42,4 @@ router.include_router(sse_routes.router)
 router.include_router(schedules.router)
 router.include_router(queue.router)
 router.include_router(integrations.router)
+router.include_router(ai.router)

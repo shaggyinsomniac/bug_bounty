@@ -34,8 +34,47 @@
             </option>
           {% endfor %}
         </select>
+        <!-- AI buttons -->
+        <button onclick="aiCheckSeverity('{{ finding.id }}')"
+                class="px-3 py-1.5 bg-purple-800 hover:bg-purple-700 text-purple-200 text-xs rounded border border-purple-600 transition-colors">
+          🤖 AI: Check Severity
+        </button>
+        <button onclick="aiFindDuplicates('{{ finding.id }}')"
+                class="px-3 py-1.5 bg-indigo-800 hover:bg-indigo-700 text-indigo-200 text-xs rounded border border-indigo-600 transition-colors">
+          🔍 AI: Find Duplicates
+        </button>
       </div>
     </div>
+
+    <!-- AI Severity suggestion panel (hidden until clicked) -->
+    <div id="ai-severity-panel" class="hidden mt-4 p-3 bg-purple-950 border border-purple-700 rounded-lg text-sm">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-purple-300 font-semibold text-xs uppercase tracking-wide">🤖 AI Severity Suggestion</span>
+        <span class="text-xs text-slate-500">(decorative — not applied)</span>
+      </div>
+      <div id="ai-severity-content" class="text-slate-300"></div>
+      <div id="ai-severity-actions" class="hidden mt-3 flex gap-2">
+        <button id="ai-severity-apply-btn"
+                class="px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white text-xs rounded transition-colors">
+          Apply
+        </button>
+        <button onclick="document.getElementById('ai-severity-panel').classList.add('hidden')"
+                class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded transition-colors">
+          Dismiss
+        </button>
+      </div>
+    </div>
+
+    <!-- AI Duplicate candidates panel (hidden until clicked) -->
+    <div id="ai-dedup-panel" class="hidden mt-4 p-3 bg-indigo-950 border border-indigo-700 rounded-lg text-sm">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-indigo-300 font-semibold text-xs uppercase tracking-wide">🔍 AI Duplicate Candidates</span>
+        <span class="text-xs text-slate-500">(decorative — not applied)</span>
+      </div>
+      <div id="ai-dedup-content" class="text-slate-300"></div>
+    </div>
+
+    <!-- Meta grid -->
 
     <!-- Meta grid -->
     <div class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">

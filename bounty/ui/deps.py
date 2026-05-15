@@ -9,12 +9,17 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 
-from bounty.config import Settings, get_settings
+import bounty.config as _bounty_config
+from bounty.config import Settings
 
 
 def get_settings_dep() -> Settings:
-    """Return the cached application settings."""
-    return get_settings()
+    """Return the cached application settings.
+
+    Accesses ``bounty.config.get_settings`` via the module so that
+    ``unittest.mock.patch("bounty.config.get_settings")`` works in tests.
+    """
+    return _bounty_config.get_settings()
 
 
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]

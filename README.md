@@ -379,3 +379,33 @@ bounty queue retry <ENTRY_ID>
 - Default maximum concurrent scans: **2** (controlled by `SCHEDULER_MAX_CONCURRENT` env var).
 - Failed entries are retried up to 3 times with decreasing priority before being marked `failed`.
 - Schedules fire via APScheduler (interval or cron triggers) and push entries into `scan_queue`.
+---
+## AI-Assisted Triage
+Phase 10 adds optional LLM-powered assistance via the Anthropic API (Claude Haiku).
+All AI outputs are **suggestions only** — no change is applied automatically.
+The operator must explicitly confirm each action in the UI or CLI.
+### Requirements
+Set `ANTHROPIC_API_KEY` in your `.env` file (or environment).  
+Without the key, all AI commands print a clear "not configured" message and exit gracefully.
+### CLI Commands
+```bash
+# Today's AI usage and cost estimate
+bounty ai usage
+# Scan findings for likely duplicates (min severity filter)
+bounty ai dedup --severity-min high
+# Ask the LLM to review severity for a specific finding
+bounty ai check-severity <FINDING_ID>
+# Polish a report body for clarity and professionalism
+bounty ai polish-report <REPORT_ID>
+```
+### Daily Cost Cap
+Set `AI_DAILY_COST_CAP_USD` (default: `5.0`) to limit daily Anthropic spend.  
+When the cap is reached, new AI requests are refused until the next UTC day.
+### UI Buttons
+- **Finding detail page** — "AI Check Severity" and "Find Duplicates" buttons.
+- **Report detail page** — "AI Polish" button.
+LLM suggestions are shown in a panel; the operator clicks **Apply** / **Accept Changes** to commit.
+### Privacy & Safety
+- Responses are cached on disk for 30 days (keyed by sha256 of system + prompt).
+- LLM suggestions **never auto-apply** — operator confirmation is always required.
+- Enable/disable globally via `AI_ENABLED=false` in `.env`.

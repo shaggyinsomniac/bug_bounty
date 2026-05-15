@@ -123,6 +123,26 @@ class ResolveError(BountyError):
 
 
 # ---------------------------------------------------------------------------
+# AI / LLM errors
+# ---------------------------------------------------------------------------
+
+class AICostCapExceededError(BountyError):
+    """Today's AI cost estimate has reached the configured daily cap.
+
+    Args:
+        today_cost: Current estimated spend for today (USD).
+        cap: Configured daily cap (USD).
+    """
+
+    def __init__(self, today_cost: float, cap: float) -> None:
+        self.today_cost = today_cost
+        self.cap = cap
+        super().__init__(
+            f"AI daily cost cap exceeded: ${today_cost:.4f} >= ${cap:.2f}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Detection errors
 # ---------------------------------------------------------------------------
 

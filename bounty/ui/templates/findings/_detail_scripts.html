@@ -27,5 +27,118 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+
+// ── AI: Check Severity ─────────────────────────────────────────────────────
+async function aiCheckSeverity(findingId) {
+  const panel = document.getElementById('ai-severity-panel');
+  const content = document.getElementById('ai-severity-content');
+  const actions = document.getElementById('ai-severity-actions');
+  panel.classList.remove('hidden');
+  content.textContent = '⏳ Asking AI…';
+  actions.classList.add('hidden');
+  try {
+    const r = await fetch('/api/ai/severity-check/' + findingId, { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) {
+      content.textContent = '⚠️ ' + (data.detail || 'AI error');
+      return;
+    }
+    const labels = {800:'critical',600:'high',400:'medium',200:'low',0:'info'};
+    const sugLabel = Object.entries(labels).reverse().find(([k]) => data.suggested_severity >= Number(k))?.[1] || 'info';
+    content.innerHTML = `
+      <div class="mb-1">Current: <strong>${data.current_severity}</strong> → Suggested: <strong>${data.suggested_severity}</strong> (${sugLabel})</div>
+      <div class="text-slate-400 text-xs">${data.rationale}</div>`;
+    actions.classList.remove('hidden');
+    document.getElementById('ai-severity-apply-btn').onclick = () => applyAiSeverity(findingId, data.suggested_severity);
+  } catch (e) {
+    content.textContent = '⚠️ Network error: ' + e.message;
+  }
+}
+
+async function applyAiSeverity(findingId, severity) {
+  try {
+    const r = await fetch('/api/ai/apply-severity/' + findingId, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ severity }),
+    });
+    if (r.ok) {
+      toast('Severity updated to ' + severity, 'success');
+      document.getElementById('ai-severity-panel').classList.add('hidden');
+      setTimeout(() => window.location.reload(), 800);
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Failed: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  }
+}
+
+// ── AI: Find Duplicates ────────────────────────────────────────────────────
+async function aiFindDuplicates(findingId) {
+  const panel = document.getElementById('ai-dedup-panel');
+  const content = document.getElementById('ai-dedup-content');
+  panel.classList.remove('hidden');
+  content.textContent = '⏳ Asking AI…';
+  try {
+    const r = await fetch('/api/ai/dedup/' + findingId, { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) {
+      content.textContent = '⚠️ ' + (data.detail || 'AI error');
+      return;
+    }
+    if (!data.candidates || data.candidates.length === 0) {
+      content.textContent = 'No likely duplicates found.';
+      return;
+    }
+    let html = '<div class="space-y-3">';
+    data.candidates.forEach(c => {
+      const barW = Math.round(c.confidence_pct);
+      html += `
+        <div class="border border-indigo-800 rounded p-2">
+          <div class="flex items-center justify-between mb-1">
+            <a href="/findings/${c.candidate_id}" class="text-indigo-300 hover:underline text-xs font-mono">${c.candidate_id.slice(0,12)}…</a>
+            <span class="text-xs text-indigo-200">${c.confidence_pct}% confidence</span>
+          </div>
+          <div class="text-xs text-slate-300 mb-1">${c.title}</div>
+          <div class="w-full bg-slate-700 rounded h-1.5 mb-1">
+            <div class="bg-indigo-500 h-1.5 rounded" style="width:${barW}%"></div>
+          </div>
+          <div class="text-xs text-slate-500">${c.reason}</div>
+          <button onclick="markDuplicate('${findingId}','${c.candidate_id}')"
+                  class="mt-2 px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white text-xs rounded transition-colors">
+            Mark as Duplicate of ${c.candidate_id.slice(0,8)}…
+          </button>
+        </div>`;
+    });
+    html += '</div>';
+    content.innerHTML = html;
+  } catch (e) {
+    content.textContent = '⚠️ Network error: ' + e.message;
+  }
+}
+
+async function markDuplicate(findingId, duplicateOf) {
+  if (!confirm('Mark this finding as duplicate of ' + duplicateOf + '?')) return;
+  try {
+    const r = await fetch('/api/ai/mark-duplicate/' + findingId, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ duplicate_of: duplicateOf }),
+    });
+    if (r.ok) {
+      toast('Finding marked as duplicate', 'success');
+      setTimeout(() => window.location.reload(), 800);
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast('Failed: ' + (err.detail || r.status), 'error');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  }
+}
 </script>
+
+
 

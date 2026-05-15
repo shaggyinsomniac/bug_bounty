@@ -2120,7 +2120,6 @@ def nuclei_status_cmd() -> None:
         )
 
 
-
 # ---------------------------------------------------------------------------
 # schedule sub-commands
 # ---------------------------------------------------------------------------
@@ -2413,17 +2412,267 @@ def queue_retry_cmd(
     typer.echo(f"[bounty queue retry] {entry_id} → new entry {new_id}")
 
 
+# ---------------------------------------------------------------------------
+# ai sub-commands
+# ---------------------------------------------------------------------------
+
+ai_app = typer.Typer(help="AI-powered assistance commands (decorative, operator confirms).")
+app.add_typer(ai_app, name="ai")
+
+_SEVERITY_MIN_AI: dict[str, int] = {
+    "critical": 800,
+    "high": 600,
+    "medium": 400,
+    "low": 200,
+    "info": 0,
+}
 
 
+@ai_app.command("dedup")
+def ai_dedup_cmd(
+    severity_min: Annotated[
+        str | None,
+        typer.Option("--severity-min", help="Minimum severity label: critical|high|medium|low|info"),
+    ] = None,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Scan all findings for likely duplicates using AI (DECORATIVE — operator confirms).
+
+    Prints suggested merges; never modifies the database automatically.
+    """
+    settings = get_settings()
+    db_path = db or settings.db_path
+    init_db(db_path)
+    apply_migrations(db_path)
+
+    if not settings.ai_enabled:
+        typer.echo("[bounty ai dedup] AI is disabled (ai_enabled=False).")
+        raise typer.Exit(0)
+    if not settings.anthropic_api_key:
+        typer.echo("[error] ANTHROPIC_API_KEY is not set.", err=True)
+        raise typer.Exit(1)
+
+    sev_floor = _SEVERITY_MIN_AI.get(severity_min or "info", 0) if severity_min else 0
+
+    async def _run() -> None:
+        from bounty.ai.dedup import find_duplicate_findings
+        from bounty.ai.client import get_client as _get_client
+        from bounty.models import Finding as _Finding
+        import json as _json
+
+        client = _get_client()
+
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                "SELECT * FROM findings WHERE severity >= ? AND status NOT IN "
+                "('duplicate','wont_fix','resolved') ORDER BY severity DESC LIMIT 200",
+                (sev_floor,),
+            )
+            rows = list(await cur.fetchall())
+
+        findings_list: list[Any] = []
+        for row in rows:
+            d = {k: row[k] for k in row.keys()}
+            tags_raw = d.get("tags", "[]")
+            d["tags"] = _json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
+            d["validated"] = bool(d.get("validated"))
+            findings_list.append(_Finding.model_validate(d))
+
+        if not findings_list:
+            typer.echo("[bounty ai dedup] No findings found.")
+            return
+
+        typer.echo(f"[bounty ai dedup] Checking {len(findings_list)} findings for duplicates...")
+        found_any = False
+        for target in findings_list:
+            candidates = [f for f in findings_list if f.id != target.id]
+            try:
+                results = await find_duplicate_findings(target, candidates[:20], client=client)
+            except Exception as exc:  # noqa: BLE001
+                typer.echo(f"  [warn] Error for {target.id}: {exc}", err=True)
+                continue
+
+            high = [(cid, c, r) for cid, c, r in results if c >= 70]
+            if high:
+                found_any = True
+                typer.echo(f"\n  Finding: {str(target.id or '')[:12]}... {target.title[:50]}")
+                for cid, conf, reason in high:
+                    typer.echo(f"    -> {cid[:12]}... ({conf}% confidence): {reason}")
+
+        if not found_any:
+            typer.echo("[bounty ai dedup] No high-confidence duplicates found.")
+
+    try:
+        asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
 
 
+@ai_app.command("check-severity")
+def ai_check_severity_cmd(
+    finding_id: Annotated[
+        str | None,
+        typer.Option("--finding-id", "-f", help="Finding ID (or prefix)"),
+    ] = None,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Review severity of a finding using AI (DECORATIVE - operator confirms).
+
+    Prints suggested severity + rationale. Never modifies the database.
+    """
+    settings = get_settings()
+    db_path = db or settings.db_path
+    init_db(db_path)
+    apply_migrations(db_path)
+
+    if not settings.ai_enabled:
+        typer.echo("[bounty ai check-severity] AI is disabled (ai_enabled=False).")
+        raise typer.Exit(0)
+    if not settings.anthropic_api_key:
+        typer.echo("[error] ANTHROPIC_API_KEY is not set.", err=True)
+        raise typer.Exit(1)
+
+    async def _run() -> None:
+        from bounty.ai.severity_check import review_severity
+        from bounty.models import Finding as _Finding, EvidencePackage as _EvidencePkg
+        import json as _json
+
+        async with get_conn(db_path) as conn:
+            if finding_id:
+                cur = await conn.execute(
+                    "SELECT * FROM findings WHERE id=? OR id LIKE ? LIMIT 1",
+                    (finding_id, finding_id + "%"),
+                )
+            else:
+                cur = await conn.execute(
+                    "SELECT * FROM findings ORDER BY severity DESC LIMIT 1"
+                )
+            row = await cur.fetchone()
+            if not row:
+                typer.echo("[error] No finding found.", err=True)
+                raise typer.Exit(1)
+
+            d = {k: row[k] for k in row.keys()}
+            tags_raw = d.get("tags", "[]")
+            d["tags"] = _json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
+            d["validated"] = bool(d.get("validated"))
+            finding = _Finding.model_validate(d)
+
+            ev_cur = await conn.execute(
+                "SELECT * FROM evidence_packages WHERE finding_id=? LIMIT 3",
+                (finding.id,),
+            )
+            ev_rows = await ev_cur.fetchall()
+            evidence = [_EvidencePkg.model_validate({k: r[k] for k in r.keys()}) for r in ev_rows]
+
+        typer.echo(f"[bounty ai check-severity] Finding: {finding.id}")
+        typer.echo(f"  Title:    {finding.title}")
+        typer.echo(f"  Current:  {finding.severity} ({finding.severity_label})")
+        typer.echo("  Asking AI...")
+
+        suggested, rationale = await review_severity(finding, evidence)
+
+        typer.echo("")
+        typer.echo("  -- AI Suggestion (DECORATIVE -- not applied) --")
+        typer.echo(f"  Suggested severity: {suggested}")
+        typer.echo(f"  Rationale: {rationale}")
+        typer.echo("")
+        typer.echo("  To apply: use the UI 'Apply' button on the finding detail page.")
+
+    try:
+        asyncio.run(_run())
+    except typer.Exit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
 
 
+@ai_app.command("polish-report")
+def ai_polish_report_cmd(
+    report_id: Annotated[int, typer.Argument(help="Report ID to polish")],
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Rewrite a report body for clarity using AI (DECORATIVE - operator confirms).
+
+    Prints the polished body to stdout. Never auto-saves to the database.
+    """
+    settings = get_settings()
+    db_path = db or settings.db_path
+    init_db(db_path)
+    apply_migrations(db_path)
+
+    if not settings.ai_enabled:
+        typer.echo("[bounty ai polish-report] AI is disabled (ai_enabled=False).")
+        raise typer.Exit(0)
+    if not settings.anthropic_api_key:
+        typer.echo("[error] ANTHROPIC_API_KEY is not set.", err=True)
+        raise typer.Exit(1)
+
+    async def _run() -> None:
+        from bounty.ai.report_polish import polish_report_body
+
+        async with get_conn(db_path) as conn:
+            cur = await conn.execute(
+                "SELECT id, body, template FROM reports WHERE id=?", (report_id,)
+            )
+            row = await cur.fetchone()
+            if not row:
+                typer.echo(f"[error] Report {report_id} not found.", err=True)
+                raise typer.Exit(1)
+            body: str = row["body"] or ""
+            template: str = row["template"] or "markdown"
+
+        typer.echo(f"[bounty ai polish-report] Report #{report_id}  (template={template})")
+        typer.echo("  Asking AI...")
+        polished = await polish_report_body(body, template)
+        typer.echo("")
+        typer.echo("-" * 60)
+        typer.echo("  AI-POLISHED BODY (DECORATIVE -- not saved)")
+        typer.echo("-" * 60)
+        typer.echo(polished)
+        typer.echo("-" * 60)
+        typer.echo("  To apply: use the UI 'Accept Changes' button on the report page.")
+
+    try:
+        asyncio.run(_run())
+    except typer.Exit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
 
 
+@ai_app.command("usage")
+def ai_usage_cmd(
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Print today's AI request count and estimated cost."""
+    settings = get_settings()
+    db_path = db or settings.db_path
+    init_db(db_path)
+    apply_migrations(db_path)
 
+    async def _run() -> None:
+        from bounty.ai.client import get_client as _get_client
 
+        client = _get_client()
+        usage = await client.get_today_usage()
+        typer.echo(f"[bounty ai usage] date={usage['date']}")
+        typer.echo(f"  requests today: {usage['request_count']}")
+        typer.echo(f"  cost estimate:  ${usage['cost_estimate']:.6f} USD")
+        typer.echo(f"  daily cap:      ${settings.ai_daily_cost_cap_usd:.2f} USD")
+        remaining = settings.ai_daily_cost_cap_usd - float(usage["cost_estimate"])
+        typer.echo(f"  remaining:      ${max(0.0, remaining):.6f} USD")
+        if float(usage["cost_estimate"]) >= settings.ai_daily_cost_cap_usd:
+            typer.echo("  WARNING: Daily cap reached -- new AI requests will be refused.")
 
+    try:
+        asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
