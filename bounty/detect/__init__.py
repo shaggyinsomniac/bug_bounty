@@ -128,6 +128,21 @@ from bounty.detect.php_specific import (
     ServerInfo,
     ServerStatus,
 )
+from bounty.detect.takeover import SubdomainTakeover
+from bounty.detect.cors import (
+    CorsWildcardWithCredentials,
+    CorsNullOrigin,
+    CorsPreflightWildcard,
+)
+from bounty.detect.mail import (
+    SpfMissing,
+    SpfWeak,
+    DmarcMissing,
+    DmarcWeak,
+    DkimNotFound,
+)
+from bounty.detect.dns import ZoneTransferAllowed
+from bounty.detect.discovery import RobotsSensitivePaths, SitemapExposed
 
 __all__ = [
     "Detection",
@@ -247,5 +262,22 @@ REGISTERED_DETECTIONS: list[Detection] = [
     MysqlExposed(),
     # ── Category 12: Nuclei CVE / community templates (1) ────────────────
     NucleiCveCheck(),
+    # ── Category 13: Subdomain takeover (1) ──────────────────────────────
+    SubdomainTakeover(),
+    # ── Category 13: CORS misconfiguration (3) ───────────────────────────
+    CorsWildcardWithCredentials(),
+    CorsNullOrigin(),
+    CorsPreflightWildcard(),
+    # ── Category 13: Mail security (5) ───────────────────────────────────
+    SpfMissing(),
+    SpfWeak(),
+    DmarcMissing(),
+    DmarcWeak(),
+    DkimNotFound(),
+    # ── Category 13: DNS zone transfer (1) ───────────────────────────────
+    ZoneTransferAllowed(),
+    # ── Category 13: Content discovery (2) ───────────────────────────────
+    RobotsSensitivePaths(),
+    SitemapExposed(),
 ]
 

@@ -45,6 +45,10 @@ class DetectionContext:
         scan_id: ULID of the current scan (for DB FK and evidence paths).
         settings: Application settings singleton.
         log: Pre-bound structlog logger (detection_id bound by runner).
+        probe_fn_with_headers: Optional async callable
+            ``(url, headers) -> ProbeResult`` for detections that need custom
+            request headers (e.g. CORS checks with a spoofed Origin).
+            Falls back to ``probe_fn`` (without custom headers) when None.
     """
 
     probe_fn: Callable[[str], Awaitable[ProbeResult]]
@@ -59,8 +63,34 @@ class DetectionContext:
     Signature: (url: str, json_body: Any) -> ProbeResult.
     None in contexts where POST is not configured.
     """
+    probe_fn_with_headers: Callable[[str, dict[str, str]], Awaitable[ProbeResult]] | None = field(
+        default=None
+    )
+    """Optional GET callable with custom headers for CORS and similar checks.
+    Signature: (url: str, headers: dict[str, str]) -> ProbeResult.
+    None in contexts where custom-header requests are not configured.
+    """
     fingerprints: list[FingerprintResult] = field(default_factory=list)
     """Fingerprint results for the current asset (populated by run_detections)."""
+    _apex_seen: dict[str, set[str]] = field(default_factory=dict)
+    """Per-detection-category set of apex domains already processed this scan.
+    Key: detection category tag (e.g. ``"mail"``), value: set of apex domains.
+    Used by mail/dns detections to avoid N duplicate checks per apex.
+    """
+
+    def claim_apex(self, category: str, apex: str) -> bool:
+        """Attempt to claim *apex* for *category* (dedup gate).
+
+        Returns ``True`` on the first call for this (category, apex) pair
+        within the current scan context, ``False`` on subsequent calls.
+        Used by mail/DNS detections to avoid duplicate checks across assets
+        that share the same apex domain.
+        """
+        seen = self._apex_seen.setdefault(category, set())
+        if apex in seen:
+            return False
+        seen.add(apex)
+        return True
 
     async def capture_evidence(self, url: str, probe_result: ProbeResult) -> EvidencePackage:
         """Capture HTTP evidence and track it for linking to the next finding.

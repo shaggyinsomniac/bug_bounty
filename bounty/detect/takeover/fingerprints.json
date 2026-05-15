@@ -1,0 +1,195 @@
+[
+  {
+    "service": "GitHub Pages",
+    "cname_patterns": ["github.io", "github.map.fastly.net"],
+    "body_fingerprints": [
+      "There isn't a GitHub Pages site here.",
+      "For root URLs (like http://example.com/) you must provide an index.html",
+      "404 - GitHub Pages"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Heroku",
+    "cname_patterns": ["herokudns.com", "herokuapp.com", "herokussl.com"],
+    "body_fingerprints": [
+      "No such app",
+      "herokucdn.com/error-pages/no-such-app.html",
+      "There's nothing here"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "AWS S3",
+    "cname_patterns": ["s3.amazonaws.com", "s3-website", "amazonaws.com"],
+    "body_fingerprints": [
+      "NoSuchBucket",
+      "The specified bucket does not exist",
+      "<Code>NoSuchBucket</Code>"
+    ],
+    "vulnerable_status": [403, 404]
+  },
+  {
+    "service": "Shopify",
+    "cname_patterns": ["myshopify.com", "shops.myshopify.com"],
+    "body_fingerprints": [
+      "Sorry, this shop is currently unavailable.",
+      "Only one step left!",
+      "this store is unavailable"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Fastly",
+    "cname_patterns": ["fastly.net", "fastlylb.net"],
+    "body_fingerprints": [
+      "Fastly error: unknown domain",
+      "Please check that this domain has been added to a service",
+      "unknown domain:"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Netlify",
+    "cname_patterns": ["netlify.com", "netlify.app", "netlifyglobalcdn.com"],
+    "body_fingerprints": [
+      "Not Found - Request ID",
+      "netlify-404-page",
+      "Page Not Found | Netlify"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Vercel",
+    "cname_patterns": ["vercel.app", "now.sh", "zeit.co"],
+    "body_fingerprints": [
+      "The deployment you are looking for does not exist",
+      "404: Not Found",
+      "This page could not be found"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Zendesk",
+    "cname_patterns": ["zendesk.com"],
+    "body_fingerprints": [
+      "Help Center Closed",
+      "Oops, this help center no longer exists",
+      "This page is no longer available"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "CloudFront",
+    "cname_patterns": ["cloudfront.net"],
+    "body_fingerprints": [
+      "The request could not be satisfied",
+      "ERROR: The request could not be satisfied",
+      "Bad request."
+    ],
+    "vulnerable_status": [403, 404]
+  },
+  {
+    "service": "Surge.sh",
+    "cname_patterns": ["surge.sh"],
+    "body_fingerprints": [
+      "project not found",
+      "Page not found - Surge"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Bitbucket Pages",
+    "cname_patterns": ["bitbucket.io"],
+    "body_fingerprints": [
+      "Repository not found",
+      "The page you have requested does not exist"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Ghost",
+    "cname_patterns": ["ghost.io"],
+    "body_fingerprints": [
+      "The thing you were looking for is no longer here",
+      "ghost.io",
+      "Failed to resolve DNS"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Tumblr",
+    "cname_patterns": ["tumblr.com"],
+    "body_fingerprints": [
+      "Whatever you were looking for doesn't currently exist at this address",
+      "There's nothing here.",
+      "this page is unclaimable"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "WordPress.com",
+    "cname_patterns": ["wordpress.com", "wp.com"],
+    "body_fingerprints": [
+      "Do you want to register",
+      "doesn't currently exist"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Readme.io",
+    "cname_patterns": ["readme.io", "readmessl.com"],
+    "body_fingerprints": [
+      "Project doesnt exist... yet!",
+      "project not found"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Unbounce",
+    "cname_patterns": ["unbounce.com"],
+    "body_fingerprints": [
+      "The requested URL was not found on this server",
+      "Ready to run your campaign? Create a free Unbounce account"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "HelpScout",
+    "cname_patterns": ["helpscoutdocs.com", "helpscout.com"],
+    "body_fingerprints": [
+      "No settings were found for this company",
+      "There is no existing Help Scout desk for this URL"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Tilda",
+    "cname_patterns": ["tilda.cc", "tilda.ws"],
+    "body_fingerprints": [
+      "Please renew your subscription",
+      "This project is not published"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Webflow",
+    "cname_patterns": ["proxy.webflow.com", "webflow.io"],
+    "body_fingerprints": [
+      "The page you are looking for doesn't exist or has been moved",
+      "Not found - Webflow"
+    ],
+    "vulnerable_status": [404]
+  },
+  {
+    "service": "Pantheon",
+    "cname_patterns": ["pantheonsite.io", "pantheon.io"],
+    "body_fingerprints": [
+      "404 error unknown site!",
+      "The gods are wise",
+      "pantheon 404"
+    ],
+    "vulnerable_status": [404]
+  }
+]
+
