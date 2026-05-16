@@ -496,7 +496,6 @@ async def test_list_programs_empty(client: AsyncClient, test_db: Path) -> None:
 
 async def test_create_and_get_program(client: AsyncClient, test_db: Path) -> None:
     body = {
-        "id": "api-prog-1",
         "platform": "manual",
         "handle": "api-prog-1",
         "name": "API Program 1",
@@ -504,12 +503,15 @@ async def test_create_and_get_program(client: AsyncClient, test_db: Path) -> Non
     }
     r = await client.post("/api/programs", json=body)
     assert r.status_code == 201
-    assert r.json()["id"] == "api-prog-1"
+    program_id = r.json()["id"]
+    # id must be a server-generated ULID (26 chars), never the user-supplied name
+    assert len(program_id) == 26, f"Expected 26-char ULID, got {program_id!r}"
+    assert program_id != "API Program 1", "id must not equal name"
 
-    r2 = await client.get("/api/programs/api-prog-1")
+    r2 = await client.get(f"/api/programs/{program_id}")
     assert r2.status_code == 200
     data = r2.json()
-    assert data["id"] == "api-prog-1"
+    assert data["id"] == program_id
     assert len(data["targets"]) == 1
 
 

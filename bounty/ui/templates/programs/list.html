@@ -74,12 +74,6 @@
 {% call modal("new-program-modal", "New Program") %}
   <form id="new-program-form" class="px-6 py-4 space-y-4">
     <div class="flex flex-col gap-1">
-      <label class="text-sm font-medium text-slate-200" for="np-id">ID</label>
-      <input id="np-id" type="text" name="id" placeholder="unique-program-id" required
-             class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
-                    focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
-    </div>
-    <div class="flex flex-col gap-1">
       <label class="text-sm font-medium text-slate-200" for="np-platform">Platform</label>
       <select id="np-platform" name="platform"
               class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
@@ -106,6 +100,41 @@
       <input id="np-url" type="text" name="url" placeholder="https://hackerone.com/..."
              class="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm
                     focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+    </div>
+
+    <!-- Targets repeater -->
+    <div id="np-targets-root" x-data="newProgramTargets()">
+      <div class="flex items-center justify-between mb-2">
+        <label class="text-sm font-medium text-slate-200">Targets</label>
+        <button type="button" @click="addTarget()"
+                class="text-xs text-blue-400 hover:text-blue-300 focus:outline-none">＋ Add target</button>
+      </div>
+      <template x-for="(t, idx) in targets" :key="idx">
+        <div class="flex gap-2 mb-2 items-center">
+          <select x-model="t.scope_type"
+                  class="bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-xs
+                         focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="in_scope">In scope</option>
+            <option value="out_of_scope">Out of scope</option>
+          </select>
+          <select x-model="t.asset_type"
+                  class="bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-xs
+                         focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="domain">Domain</option>
+            <option value="url">URL</option>
+            <option value="ip">IP</option>
+            <option value="cidr">CIDR</option>
+            <option value="wildcard">Wildcard</option>
+            <option value="asn">ASN</option>
+          </select>
+          <input x-model="t.value" type="text" placeholder="e.g. example.com"
+                 class="flex-1 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-xs
+                        focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
+          <button type="button" @click="removeTarget(idx)"
+                  class="text-slate-400 hover:text-red-400 focus:outline-none px-1 text-base leading-none">×</button>
+        </div>
+      </template>
+      <p x-show="targets.length === 0" class="text-xs text-slate-500 italic">No targets — you can add them later.</p>
     </div>
   </form>
 
@@ -140,10 +169,30 @@ function applyProgramFilters() {
   history.pushState(null, '', url);
 }
 
+function newProgramTargets() {
+  return {
+    targets: [],
+    addTarget() {
+      this.targets.push({ scope_type: 'in_scope', asset_type: 'domain', value: '' });
+    },
+    removeTarget(idx) {
+      this.targets.splice(idx, 1);
+    },
+  };
+}
+
 async function submitNewProgram() {
   const form = document.getElementById('new-program-form');
   const btn = document.getElementById('np-submit');
   const data = Object.fromEntries(new FormData(form));
+
+  // Collect targets from Alpine component
+  const targetsRoot = document.getElementById('np-targets-root');
+  const alpineData = Alpine.$data(targetsRoot);
+  const scope = (alpineData.targets || [])
+    .filter(t => t.value && t.value.trim())
+    .map(t => ({ scope_type: t.scope_type, asset_type: t.asset_type, value: t.value.trim() }));
+
   btn.disabled = true;
   btn.textContent = 'Creating…';
   try {
@@ -151,11 +200,11 @@ async function submitNewProgram() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        id: data.id,
         platform: data.platform,
         handle: data.handle,
         name: data.name,
         url: data.url || '',
+        scope: scope,
       }),
     });
     if (r.ok) {

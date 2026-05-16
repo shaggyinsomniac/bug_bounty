@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from bounty.db import get_conn
 from bounty.models import Platform
 from bounty.ui.deps import ApiAuthDep, DbPathDep
+from bounty.ulid import make_ulid
 
 router = APIRouter(prefix="/api/programs", tags=["programs"])
 
@@ -89,13 +90,12 @@ async def get_program(
 
 
 class TargetSpec(BaseModel):
-    scope_type: str = "in_scope"
-    asset_type: str = "wildcard"
+    scope_type: Literal["in_scope", "out_of_scope"] = "in_scope"
+    asset_type: Literal["url", "wildcard", "cidr", "android", "ios", "other", "ip", "asn", "domain"] = "domain"
     value: str
 
 
 class ProgramCreateRequest(BaseModel):
-    id: str
     platform: Platform
     handle: str
     name: str
@@ -111,6 +111,7 @@ async def create_program(
     _auth: ApiAuthDep,
 ) -> JSONResponse:
     """Create a manual program with optional scope rules."""
+    program_id = make_ulid()
     ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     async with get_conn(db_path) as conn:
         try:
@@ -119,7 +120,7 @@ async def create_program(
                 INSERT INTO programs (id, platform, handle, name, url, policy_url, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (body.id, body.platform, body.handle, body.name, body.url, body.policy_url, ts, ts),
+                (program_id, body.platform, body.handle, body.name, body.url, body.policy_url, ts, ts),
             )
         except Exception as exc:
             raise HTTPException(status_code=409, detail=f"Program already exists: {exc}") from exc
@@ -127,11 +128,11 @@ async def create_program(
         for t in body.scope:
             await conn.execute(
                 "INSERT INTO targets (program_id, scope_type, asset_type, value) VALUES (?, ?, ?, ?)",
-                (body.id, t.scope_type, t.asset_type, t.value),
+                (program_id, t.scope_type, t.asset_type, t.value),
             )
         await conn.commit()
 
-        cur = await conn.execute("SELECT * FROM programs WHERE id = ?", (body.id,))
+        cur = await conn.execute("SELECT * FROM programs WHERE id = ?", (program_id,))
         row = await cur.fetchone()
 
     return JSONResponse(_prog_row(row), status_code=201)  # type: ignore[arg-type]

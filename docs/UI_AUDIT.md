@@ -176,3 +176,60 @@ Native `<dialog>` elements with `onclick=".showModal()"` fail on real clicks bec
 - `pyproject.toml` — added `pytest-playwright` to dev extras
 - `README.md` — added "UI Testing" section
 
+---
+
+## Post-Audit Bug Report (2026-05-17)
+
+Two form-to-DB correctness bugs were discovered after the initial audit and fixed in a follow-up PR.
+They were **not caught by the original Playwright tests** because those tests only verified that
+modals open and close — they did not submit forms and inspect the resulting database rows.
+
+### BUG A — Program ID stored as user-entered name instead of ULID
+
+**Symptom:** After clicking "New Program" and entering a name (e.g. "NVIDIA test"), the
+`programs` table row had `id = "NVIDIA test"` — the user's display name — instead of a
+generated ULID.
+
+**Root cause:** `ProgramCreateRequest` included an `id: str` field; the HTML form had an
+`<input name="id">` that the user filled in; the JS sent it to the API; the API used `body.id`
+directly as the DB primary key.
+
+**Fix:**
+- Removed `id` from `ProgramCreateRequest` (model has no id field, extra JSON keys are ignored).
+- Added `from bounty.ulid import make_ulid` to `bounty/ui/routes/programs.py`.
+- `create_program` now calls `program_id = make_ulid()` before the INSERT.
+- Removed the `<input name="id">` from `programs/list.html`.
+
+### BUG B — Targets not persisted on program creation
+
+**Symptom:** After creating a program via the UI, the `targets` table had zero rows for that
+program. Subsequent scans immediately completed with 0 assets / 0 findings because
+`recon_pipeline` had no targets to work with.
+
+**Root cause:** The `<form>` in `programs/list.html` had no target input fields. The
+`submitNewProgram()` JS function never sent a `scope` array. The backend model already
+handled `scope: list[TargetSpec]` correctly, but the field was always empty `[]`.
+
+**Fix:**
+- Added an Alpine.js targets repeater to `programs/list.html`:
+  - "+ Add target" button appends a row with scope_type / asset_type / value controls.
+  - "×" button removes a row.
+  - Empty value rows are filtered out before submission.
+- Updated `submitNewProgram()` to read `Alpine.$data(np-targets-root).targets` and include
+  the filtered list as `scope` in the POST body.
+- Changed `TargetSpec` in `bounty/ui/routes/programs.py` to use `Literal` types for proper
+  enum validation (returns HTTP 422 on invalid scope_type / asset_type).
+
+### Why the audit missed these
+
+The original Playwright smoke tests in `test_ui_smoke.py` covered:
+- Modal open / close mechanics (Alpine event dispatching)
+- Basic page-load health (HTTP 200, no JS console errors)
+
+They did **not** cover:
+- Filling and submitting a create-program form
+- Verifying the resulting DB rows contain correct data (ULID id, target rows)
+
+A new end-to-end test `test_new_program_form_roundtrip` was added to `test_ui_smoke.py`
+and 9 backend unit tests were added in `tests/test_program_create_form.py` to prevent
+regression.

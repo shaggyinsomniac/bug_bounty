@@ -265,6 +265,53 @@ def test_new_schedule_modal_cancel(page: Page, live_server_url: str) -> None:
     expect(page.locator("text=Create Schedule")).to_be_hidden(timeout=3000)
 
 
+# ---------------------------------------------------------------------------
+# New Program form-to-DB round-trip
+# ---------------------------------------------------------------------------
+
+def test_new_program_form_roundtrip(page: Page, live_server_url: str) -> None:
+    """Create a program via the UI form; verify ULID id and target are persisted."""
+    import re as _re
+
+    goto(page, live_server_url + "/programs")
+    open_modal(page, "New Program")
+
+    backdrop = page.locator(".fixed.inset-0.z-50").first
+    expect(backdrop).to_be_visible(timeout=5000)
+
+    # Fill the basic program fields (no ID field — it's generated server-side)
+    page.fill("#np-handle", "playwright-test-prog")
+    page.fill("#np-name", "Playwright Test Program")
+    # Platform defaults to h1; leave it
+
+    # Click "+ Add target" and fill in the target row
+    page.click("button:has-text('Add target')")
+    page.wait_for_timeout(300)
+
+    # Fill the target value input (the first one rendered by Alpine x-for)
+    page.locator("#np-targets-root input[type='text']").first.fill("playwright.example.com")
+
+    # Submit the form
+    page.click("#np-submit")
+
+    # After submission the modal closes and we're redirected to the detail page
+    page.wait_for_url("**/programs/**", timeout=10000)
+
+    # Extract the program id from the URL
+    url = page.url
+    program_id = url.rstrip("/").split("/")[-1]
+
+    # id must be a 26-char ULID, not equal to the program name
+    assert len(program_id) == 26, f"Expected 26-char ULID, got {program_id!r}"
+    assert program_id != "Playwright Test Program", "id must not equal name"
+    assert _re.match(r"^[0-9A-HJKMNP-TV-Z]{26}$", program_id), (
+        f"id does not look like a valid ULID: {program_id!r}"
+    )
+
+    # The detail page should show the target we added
+    expect(page.locator("text=playwright.example.com")).to_be_visible(timeout=5000)
+
+
 
 
 
