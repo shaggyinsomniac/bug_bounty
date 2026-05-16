@@ -107,7 +107,7 @@ class Target(_Base):
     id: int | None = None
     program_id: str
     scope_type: Literal["in_scope", "out_of_scope"]
-    asset_type: Literal["url", "wildcard", "cidr", "android", "ios", "other", "ip", "asn"]
+    asset_type: Literal["url", "wildcard", "cidr", "android", "ios", "other", "ip", "asn", "domain"]
     value: str
     max_severity: str | None = None
     notes: str = ""
