@@ -936,6 +936,27 @@ CREATE TABLE IF NOT EXISTS ai_cache (
 COMMIT;
 """
 
+_MIGRATION_V14 = """
+BEGIN TRANSACTION;
+
+-- Recon enrichment table: stores whois, ASN, favicon hash, rDNS results.
+CREATE TABLE IF NOT EXISTS recon_enrichment (
+    id         TEXT PRIMARY KEY,
+    asset_id   TEXT REFERENCES assets(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL,  -- whois | asn | favicon | rdns | related_tld
+    data       TEXT NOT NULL DEFAULT '{}',  -- JSON blob
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_recon_enrichment_asset ON recon_enrichment(asset_id);
+CREATE INDEX IF NOT EXISTS idx_recon_enrichment_kind ON recon_enrichment(kind);
+
+-- Favicon mmh3 column on assets (nullable; populated by toolbox)
+ALTER TABLE assets ADD COLUMN favicon_mmh3 TEXT;
+
+COMMIT;
+"""
+
 _MIGRATIONS: list[str] = [
     _MIGRATION_V1,
     # v2 → add leads table for intel / Shodan triage.
@@ -970,6 +991,8 @@ _MIGRATIONS: list[str] = [
     _MIGRATION_V12,
     # v13 (Phase 10) → add ai_cache metadata table (actual cache is filesystem).
     _MIGRATION_V13,
+    # v14 (Phase 16) → add recon_enrichment table and favicon_mmh3 column.
+    _MIGRATION_V14,
 ]
 
 

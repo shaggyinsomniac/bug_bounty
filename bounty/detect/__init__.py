@@ -143,6 +143,40 @@ from bounty.detect.mail import (
 )
 from bounty.detect.dns import ZoneTransferAllowed
 from bounty.detect.discovery import RobotsSensitivePaths, SitemapExposed
+from bounty.detect.security_headers import (
+    CspMissing,
+    CspUnsafeInline,
+    HstsMissing,
+    HstsShortMaxAge,
+    XFrameOptionsMissing,
+    XContentTypeOptionsMissing,
+    ReferrerPolicyMissing,
+    PermissionsPolicyMissing,
+)
+from bounty.detect.cookies import (
+    CookieMissingSecure,
+    CookieMissingHttpOnly,
+    CookieMissingSameSite,
+)
+from bounty.detect.web import (
+    OpenRedirectReflected,
+    ClickjackingMissingProtection,
+    MixedContentHttpResources,
+    DefaultPageDetected,
+    InstallScriptExposed,
+    PackageJsonExposed,
+    XPoweredByVerbose,
+    ServerVerbose,
+    InternalIpInHeader,
+    WebSocketEndpointDetected,
+)
+from bounty.detect.tls import (
+    TlsWeakProtocols,
+    TlsWeakCiphers,
+    TlsCertExpired,
+    TlsCertSelfSigned,
+    TlsCertHostnameMismatch,
+)
 
 __all__ = [
     "Detection",
@@ -276,8 +310,40 @@ REGISTERED_DETECTIONS: list[Detection] = [
     DkimNotFound(),
     # ── Category 13: DNS zone transfer (1) ───────────────────────────────
     ZoneTransferAllowed(),
-    # ── Category 13: Content discovery (2) ───────────────────────────────
+    # ── Category 13: Content discovery (2) ───────────────────────────────────
     RobotsSensitivePaths(),
     SitemapExposed(),
+    # ── Category 14: Security headers (8) ────────────────────────────────────
+    CspMissing(),
+    CspUnsafeInline(),
+    HstsMissing(),
+    HstsShortMaxAge(),
+    XFrameOptionsMissing(),
+    XContentTypeOptionsMissing(),
+    ReferrerPolicyMissing(),
+    PermissionsPolicyMissing(),
+    # ── Category 15: Cookie flags (3) ────────────────────────────────────────
+    CookieMissingSecure(),
+    CookieMissingHttpOnly(),
+    CookieMissingSameSite(),
+    # ── Category 16: Web miscellaneuous (6) ──────────────────────────────────
+    OpenRedirectReflected(),
+    ClickjackingMissingProtection(),
+    MixedContentHttpResources(),
+    DefaultPageDetected(),
+    InstallScriptExposed(),
+    PackageJsonExposed(),
+    # ── Category 17: Header information disclosure (3) ───────────────────────
+    XPoweredByVerbose(),
+    ServerVerbose(),
+    InternalIpInHeader(),
+    # ── Category 18: WebSocket (1) ───────────────────────────────────────────
+    WebSocketEndpointDetected(),
+    # ── Category 19: TLS deep checks (5) ─────────────────────────────────────
+    TlsWeakProtocols(),
+    TlsWeakCiphers(),
+    TlsCertExpired(),
+    TlsCertSelfSigned(),
+    TlsCertHostnameMismatch(),
 ]
 

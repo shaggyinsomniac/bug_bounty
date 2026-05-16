@@ -461,6 +461,125 @@ async def _run_fingerprint_phase(
     await _asyncio.gather(*[_fp_one(aid) for aid in asset_ids], return_exceptions=True)
 
 
+async def _run_toolbox_enrichment(
+    db_path: Path,
+    asset_ids: list[str],
+    bound_log: Any,
+) -> None:
+    """Run Phase 16 toolbox enrichment: whois, ASN, favicon, rDNS.
+
+    Stores results in the recon_enrichment table.  Failures per-asset are
+    logged and do NOT propagate.
+    """
+    import asyncio as _asyncio
+    import json as _json
+
+    from bounty.recon.toolbox.whois import whois_lookup
+    from bounty.recon.toolbox.asn import asn_lookup
+    from bounty.recon.toolbox.favicon_hash import favicon_hash
+    from bounty.recon.toolbox.reverse_dns import reverse_dns
+    from bounty.ulid import make_ulid as _make_ulid
+
+    sem = _asyncio.Semaphore(10)
+    # track which apex domains / /24s we have already enriched (dedup)
+    seen_apexes: set[str] = set()
+    seen_cidr24s: set[str] = set()
+
+    async def _enrich_one(asset_id: str) -> None:
+        async with sem:
+            try:
+                async with get_conn(db_path) as conn:
+                    cur = await conn.execute(
+                        "SELECT id, host, ip, scheme, url, primary_scheme FROM assets WHERE id=?",
+                        (asset_id,),
+                    )
+                    row = await cur.fetchone()
+                    if row is None:
+                        return
+
+                    host: str = str(row["host"])
+                    ip: str | None = row["ip"]
+                    url: str = str(row["url"])
+
+                    # -- WHOIS (once per apex) --------------------------------
+                    apex = ".".join(host.split(".")[-2:]) if "." in host else host
+                    if apex not in seen_apexes:
+                        seen_apexes.add(apex)
+                        try:
+                            wdata = await whois_lookup(apex)
+                            await conn.execute(
+                                """INSERT OR IGNORE INTO recon_enrichment
+                                   (id, asset_id, kind, data, created_at)
+                                   VALUES (?,?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))""",
+                                (_make_ulid(), asset_id, "whois", _json.dumps(wdata)),
+                            )
+                            await conn.commit()
+                        except Exception as exc:  # noqa: BLE001
+                            bound_log.debug("toolbox_whois_error", host=host, error=str(exc))
+
+                    # -- ASN (once per /24) -----------------------------------
+                    if ip:
+                        parts = ip.split(".")
+                        cidr24 = ".".join(parts[:3]) if len(parts) == 4 else ip
+                        if cidr24 not in seen_cidr24s:
+                            seen_cidr24s.add(cidr24)
+                            try:
+                                adata = await asn_lookup(ip)
+                                await conn.execute(
+                                    """INSERT OR IGNORE INTO recon_enrichment
+                                       (id, asset_id, kind, data, created_at)
+                                       VALUES (?,?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))""",
+                                    (_make_ulid(), asset_id, "asn", _json.dumps(adata)),
+                                )
+                                await conn.commit()
+                            except Exception as exc:  # noqa: BLE001
+                                bound_log.debug("toolbox_asn_error", ip=ip, error=str(exc))
+
+                        # Reverse DNS (IP-only assets)
+                        try:
+                            import ipaddress as _ipaddress
+                            _ipaddress.ip_address(host)
+                            # host IS an IP
+                            rdns = await reverse_dns(host)
+                            if rdns:
+                                await conn.execute(
+                                    """INSERT OR IGNORE INTO recon_enrichment
+                                       (id, asset_id, kind, data, created_at)
+                                       VALUES (?,?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))""",
+                                    (_make_ulid(), asset_id, "rdns",
+                                     _json.dumps({"hostname": rdns})),
+                                )
+                                await conn.commit()
+                        except (ValueError, Exception):  # noqa: BLE001
+                            pass  # host is not a bare IP
+
+                    # -- Favicon hash ----------------------------------------
+                    scheme = str(row["primary_scheme"] or row["scheme"] or "https")
+                    if scheme in ("http", "https"):
+                        try:
+                            fh = await favicon_hash(url)
+                            if fh:
+                                await conn.execute(
+                                    "UPDATE assets SET favicon_mmh3=? WHERE id=?",
+                                    (fh, asset_id),
+                                )
+                                await conn.execute(
+                                    """INSERT OR IGNORE INTO recon_enrichment
+                                       (id, asset_id, kind, data, created_at)
+                                       VALUES (?,?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))""",
+                                    (_make_ulid(), asset_id, "favicon",
+                                     _json.dumps({"mmh3": fh})),
+                                )
+                                await conn.commit()
+                        except Exception as exc:  # noqa: BLE001
+                            bound_log.debug("toolbox_favicon_error", url=url, error=str(exc))
+
+            except Exception as exc:  # noqa: BLE001
+                bound_log.warning("toolbox_enrichment_asset_error", asset_id=asset_id, error=str(exc))
+
+    await _asyncio.gather(*[_enrich_one(aid) for aid in asset_ids], return_exceptions=True)
+
+
 async def _run_detect_phase(
     db_path: Path,
     program_id: str,
@@ -1116,6 +1235,14 @@ async def recon_pipeline(
                 effective_db, scan_id, "detect", "completed",
                 {"assets_processed": len(unique_asset_ids), "findings": findings_count},
             )
+
+            # ── Phase 7: Toolbox enrichment ────────────────────────────────
+            try:
+                await _run_toolbox_enrichment(
+                    effective_db, unique_asset_ids, bound_log=bound_log
+                )
+            except Exception as _tb_exc:  # noqa: BLE001
+                bound_log.warning("toolbox_enrichment_error", error=str(_tb_exc))
 
     except Exception as exc:  # noqa: BLE001
         pipeline_error = str(exc)

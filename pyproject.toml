@@ -30,6 +30,9 @@ dependencies = [
     "chardet>=5.2.0",
     "mmh3>=4.1.0",
 
+    # Recon toolbox
+    "python-whois>=0.9.4",
+
     # Browser automation
     "playwright>=1.44.0",
 

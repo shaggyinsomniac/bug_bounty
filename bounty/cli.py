@@ -2677,3 +2677,89 @@ def ai_usage_cmd(
 
 if __name__ == "__main__":
     app()
+
+
+# ---------------------------------------------------------------------------
+# Phase 16 — Recon toolbox CLI commands
+# ---------------------------------------------------------------------------
+
+
+@app.command("whois")
+def whois_cmd(
+    domain: Annotated[str, typer.Argument(help="Domain to look up")],
+) -> None:
+    """Perform a WHOIS lookup for DOMAIN."""
+    async def _run() -> None:
+        from bounty.recon.toolbox.whois import whois_lookup
+        result = await whois_lookup(domain)
+        typer.echo(f"[bounty whois] {domain}")
+        for k, v in result.items():
+            typer.echo(f"  {k}: {v}")
+
+    try:
+        asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("asn")
+def asn_cmd(
+    ip: Annotated[str, typer.Argument(help="IP address to look up")],
+) -> None:
+    """Look up ASN, org, country, and CIDR for IP."""
+    async def _run() -> None:
+        from bounty.recon.toolbox.asn import asn_lookup
+        result = await asn_lookup(ip)
+        typer.echo(f"[bounty asn] {ip}")
+        for k, v in result.items():
+            typer.echo(f"  {k}: {v}")
+
+    try:
+        asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("favicon-hash")
+def favicon_hash_cmd(
+    url: Annotated[str, typer.Argument(help="Base URL (e.g. https://example.com)")],
+) -> None:
+    """Compute Shodan-style mmh3 favicon hash for URL."""
+    async def _run() -> None:
+        from bounty.recon.toolbox.favicon_hash import favicon_hash
+        h = await favicon_hash(url)
+        if h is None:
+            typer.echo(f"[bounty favicon-hash] {url}: not found or error")
+        else:
+            typer.echo(f"[bounty favicon-hash] {url}")
+            typer.echo(f"  hash: {h}")
+
+    try:
+        asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("related-tlds")
+def related_tlds_cmd(
+    domain: Annotated[str, typer.Argument(help="Domain label or FQDN (e.g. example or example.com)")],
+) -> None:
+    """Find TLD variants of DOMAIN that resolve via DNS."""
+    async def _run() -> None:
+        from bounty.recon.toolbox.related_tlds import find_related_tlds
+        results = await find_related_tlds(domain)
+        typer.echo(f"[bounty related-tlds] {domain}")
+        if not results:
+            typer.echo("  No resolving TLD variants found.")
+        for fqdn in results:
+            typer.echo(f"  {fqdn}")
+
+    try:
+        asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
