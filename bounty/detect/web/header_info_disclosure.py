@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import ClassVar
 import re
 from collections.abc import AsyncGenerator
 from bounty.detect.base import Detection, DetectionContext
@@ -23,7 +24,7 @@ class XPoweredByVerbose(Detection):
     category = "information_disclosure"
     severity_default = 200
     cwe = "CWE-200"
-    tags: tuple[str, ...] = ("information-disclosure", "x-powered-by")
+    tags: ClassVar[tuple[str, ...]] = ("information-disclosure", "x-powered-by")
 
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
         pr = await ctx.probe_fn(asset.url)
@@ -51,7 +52,7 @@ class ServerVerbose(Detection):
     category = "information_disclosure"
     severity_default = 200
     cwe = "CWE-200"
-    tags: tuple[str, ...] = ("information-disclosure", "server-header")
+    tags: ClassVar[tuple[str, ...]] = ("information-disclosure", "server-header")
 
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
         pr = await ctx.probe_fn(asset.url)
@@ -79,7 +80,7 @@ class InternalIpInHeader(Detection):
     category = "information_disclosure"
     severity_default = 400
     cwe = "CWE-200"
-    tags: tuple[str, ...] = ("information-disclosure", "internal-ip")
+    tags: ClassVar[tuple[str, ...]] = ("information-disclosure", "internal-ip")
 
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
         pr = await ctx.probe_fn(asset.url)

@@ -2675,8 +2675,7 @@ def ai_usage_cmd(
         raise typer.Exit(1)
 
 
-if __name__ == "__main__":
-    app()
+# __main__ block moved to end of file
 
 
 # ---------------------------------------------------------------------------
@@ -2763,3 +2762,6 @@ def related_tlds_cmd(
         typer.echo(f"[error] {exc}", err=True)
         raise typer.Exit(1)
 
+
+if __name__ == "__main__":  # pragma: no cover
+    app()

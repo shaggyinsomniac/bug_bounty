@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import ClassVar
 import re
 from collections.abc import AsyncGenerator
 from bounty.detect.base import Detection, DetectionContext
@@ -19,7 +20,7 @@ class MixedContentHttpResources(Detection):
     category = "mixed_content"
     severity_default = 300
     cwe = "CWE-319"
-    tags: tuple[str, ...] = ("mixed-content", "tls", "https")
+    tags: ClassVar[tuple[str, ...]] = ("mixed-content", "tls", "https")
 
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return asset.scheme == "https" or asset.primary_scheme == "https"

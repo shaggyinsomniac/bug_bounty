@@ -129,7 +129,7 @@ async def whois_lookup(domain: str) -> dict[str, Any]:
 
     # ── Try python-whois ─────────────────────────────────────────────────────
     try:
-        import whois as _whois  # type: ignore[import-untyped]
+        import whois as _whois  # type: ignore[import-untyped,unused-ignore]
 
         loop = asyncio.get_event_loop()
         w = await loop.run_in_executor(None, _whois.whois, apex)

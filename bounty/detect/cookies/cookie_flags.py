@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import ClassVar
 from collections.abc import AsyncGenerator
 from bounty.detect.base import Detection, DetectionContext
 from bounty.models import Asset, FindingDraft, FingerprintResult
@@ -20,7 +21,7 @@ class CookieMissingSecure(Detection):
     category = "cookie_security"
     severity_default = 400
     cwe = "CWE-614"
-    tags: tuple[str, ...] = ("cookies", "secure-flag", "https")
+    tags: ClassVar[tuple[str, ...]] = ("cookies", "secure-flag", "https")
 
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return asset.scheme == "https" or asset.primary_scheme == "https"
@@ -55,7 +56,7 @@ class CookieMissingHttpOnly(Detection):
     category = "cookie_security"
     severity_default = 300
     cwe = "CWE-1004"
-    tags: tuple[str, ...] = ("cookies", "httponly-flag")
+    tags: ClassVar[tuple[str, ...]] = ("cookies", "httponly-flag")
 
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
         pr = await ctx.probe_fn(asset.url)
@@ -87,7 +88,7 @@ class CookieMissingSameSite(Detection):
     category = "cookie_security"
     severity_default = 200
     cwe = "CWE-352"
-    tags: tuple[str, ...] = ("cookies", "samesite", "csrf")
+    tags: ClassVar[tuple[str, ...]] = ("cookies", "samesite", "csrf")
 
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
         pr = await ctx.probe_fn(asset.url)

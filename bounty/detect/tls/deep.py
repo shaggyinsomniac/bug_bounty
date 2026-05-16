@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Any, ClassVar
 import asyncio
 import ssl
 import socket
@@ -62,7 +63,7 @@ class TlsWeakProtocols(Detection):
     category = "tls_configuration"
     severity_default = 500
     cwe = "CWE-326"
-    tags: tuple[str, ...] = ("tls", "weak-protocol")
+    tags: ClassVar[tuple[str, ...]] = ("tls", "weak-protocol")
 
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return _https_asset(asset)
@@ -106,7 +107,7 @@ class TlsWeakCiphers(Detection):
     category = "tls_configuration"
     severity_default = 600
     cwe = "CWE-326"
-    tags: tuple[str, ...] = ("tls", "weak-cipher", "rc4")
+    tags: ClassVar[tuple[str, ...]] = ("tls", "weak-cipher", "rc4")
 
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return _https_asset(asset)
@@ -149,7 +150,7 @@ class TlsCertExpired(Detection):
     category = "tls_certificate"
     severity_default = 800
     cwe = "CWE-298"
-    tags: tuple[str, ...] = ("tls", "certificate", "expired")
+    tags: ClassVar[tuple[str, ...]] = ("tls", "certificate", "expired")
 
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return _https_asset(asset)
@@ -164,12 +165,12 @@ class TlsCertExpired(Detection):
         if sock is None:
             return
         try:
-            cert = sock.getpeercert()
+            cert: Any = sock.getpeercert()
         finally:
             sock.close()
         if not cert:
             return
-        not_after_str = cert.get("notAfter", "")
+        not_after_str: str = cert.get("notAfter", "")
         if not not_after_str:
             return
         try:
@@ -201,7 +202,7 @@ class TlsCertSelfSigned(Detection):
     category = "tls_certificate"
     severity_default = 400
     cwe = "CWE-295"
-    tags: tuple[str, ...] = ("tls", "certificate", "self-signed")
+    tags: ClassVar[tuple[str, ...]] = ("tls", "certificate", "self-signed")
 
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return _https_asset(asset)
@@ -216,7 +217,7 @@ class TlsCertSelfSigned(Detection):
         if sock is None:
             return
         try:
-            cert = sock.getpeercert()
+            cert: Any = sock.getpeercert()
         finally:
             sock.close()
         if not cert:
@@ -245,7 +246,7 @@ class TlsCertHostnameMismatch(Detection):
     category = "tls_certificate"
     severity_default = 500
     cwe = "CWE-297"
-    tags: tuple[str, ...] = ("tls", "certificate", "hostname-mismatch")
+    tags: ClassVar[tuple[str, ...]] = ("tls", "certificate", "hostname-mismatch")
 
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return _https_asset(asset)
@@ -260,27 +261,20 @@ class TlsCertHostnameMismatch(Detection):
         if sock is None:
             return
         try:
-            cert = sock.getpeercert()
+            cert: Any = sock.getpeercert()
         finally:
             sock.close()
         if not cert:
             return
-        try:
-            ssl.match_hostname(cert, host)  # type: ignore[attr-defined]
-            return  # no mismatch
-        except (ssl.CertificateError, AttributeError):
-            pass
-        # ssl.match_hostname may not exist in Python 3.12+ — verify manually
-        sans = [v for t, v in cert.get("subjectAltName", []) if t == "DNS"]
+        # ssl.match_hostname removed in Python 3.12+ — verify manually
+        sans: list[str] = [str(v) for t, v in cert.get("subjectAltName", ()) if str(t) == "DNS"]
         if sans:
             for san in sans:
-                try:
-                    ssl.match_hostname({"subjectAltName": [("DNS", san)]}, host)  # type: ignore[attr-defined]
+                san_s = str(san)
+                if san_s == host or (san_s.startswith("*.") and host.endswith(san_s[1:])):
                     return
-                except (ssl.CertificateError, AttributeError):
-                    continue
-        cn_tuples = [x[0] for x in cert.get("subject", []) if x[0][0] == "commonName"]
-        cn = cn_tuples[0][1] if cn_tuples else None
+        cn_tuples = [x[0] for x in cert.get("subject", ()) if x[0][0] == "commonName"]
+        cn: str | None = str(cn_tuples[0][1]) if cn_tuples else None
         if cn and (cn == host or (cn.startswith("*.") and host.endswith(cn[1:]))):
             return
         pr = _fake_pr(asset, f"CN/SAN mismatch for host {host}")

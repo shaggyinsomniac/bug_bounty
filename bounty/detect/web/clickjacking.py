@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import ClassVar
 from collections.abc import AsyncGenerator
 from bounty.detect.base import Detection, DetectionContext
 from bounty.models import Asset, FindingDraft, FingerprintResult
@@ -12,7 +13,7 @@ class ClickjackingMissingProtection(Detection):
     category = "clickjacking"
     severity_default = 300
     cwe = "CWE-1021"
-    tags: tuple[str, ...] = ("clickjacking", "x-frame-options", "csp")
+    tags: ClassVar[tuple[str, ...]] = ("clickjacking", "x-frame-options", "csp")
 
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return asset.scheme in ("http", "https")

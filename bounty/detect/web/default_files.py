@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import ClassVar
 from collections.abc import AsyncGenerator
 from bounty.detect.base import Detection, DetectionContext
 from bounty.models import Asset, FindingDraft, FingerprintResult
@@ -12,7 +13,7 @@ _INSTALL_KEYWORDS = [b"install", b"setup", b"wizard", b"database", b"configurati
 
 def _is_soft_404(body: bytes) -> bool:
     low = body.lower()
-    return b"not found" in low or b"404" in low or len(body) < 50
+    return b"not found" in low or b"404" in low or len(body) < 20
 
 
 class DefaultPageDetected(Detection):
@@ -21,7 +22,7 @@ class DefaultPageDetected(Detection):
     category = "default_files"
     severity_default = 200
     cwe = "CWE-538"
-    tags: tuple[str, ...] = ("default-files", "information-disclosure")
+    tags: ClassVar[tuple[str, ...]] = ("default-files", "information-disclosure")
 
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
         if ctx.is_soft_404_site(asset):
@@ -53,7 +54,7 @@ class InstallScriptExposed(Detection):
     category = "default_files"
     severity_default = 600
     cwe = "CWE-538"
-    tags: tuple[str, ...] = ("default-files", "install-script")
+    tags: ClassVar[tuple[str, ...]] = ("default-files", "install-script")
 
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
         if ctx.is_soft_404_site(asset):
@@ -89,7 +90,7 @@ class PackageJsonExposed(Detection):
     category = "default_files"
     severity_default = 300
     cwe = "CWE-538"
-    tags: tuple[str, ...] = ("default-files", "package-json", "dependency-disclosure")
+    tags: ClassVar[tuple[str, ...]] = ("default-files", "package-json", "dependency-disclosure")
 
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
         url = asset.url.rstrip("/") + "/package.json"

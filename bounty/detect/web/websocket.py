@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import ClassVar
 from collections.abc import AsyncGenerator
 from bounty.detect.base import Detection, DetectionContext
 from bounty.models import Asset, FindingDraft, FingerprintResult
@@ -20,7 +21,7 @@ class WebSocketEndpointDetected(Detection):
     category = "websocket"
     severity_default = 100
     cwe = None
-    tags: tuple[str, ...] = ("websocket", "informational")
+    tags: ClassVar[tuple[str, ...]] = ("websocket", "informational")
 
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return asset.scheme in ("http", "https")

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import ClassVar
 from collections.abc import AsyncGenerator
 from urllib.parse import urlparse, urlencode, parse_qs, urljoin
 from bounty.detect.base import Detection, DetectionContext
@@ -17,7 +18,7 @@ class OpenRedirectReflected(Detection):
     category = "open_redirect"
     severity_default = 500
     cwe = "CWE-601"
-    tags: tuple[str, ...] = ("open-redirect", "redirect")
+    tags: ClassVar[tuple[str, ...]] = ("open-redirect", "redirect")
 
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return asset.scheme in ("http", "https")

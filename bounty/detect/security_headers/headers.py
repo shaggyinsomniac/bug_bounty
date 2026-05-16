@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+from typing import ClassVar
 import re
 from collections.abc import AsyncGenerator
 from bounty.detect.base import Detection, DetectionContext
@@ -28,7 +29,7 @@ class CspMissing(Detection):
     category = "security_headers"
     severity_default = 300
     cwe = "CWE-693"
-    tags: tuple[str, ...] = ("csp", "security-headers")
+    tags: ClassVar[tuple[str, ...]] = ("csp", "security-headers")
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return _is_html(asset)
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
@@ -46,7 +47,7 @@ class CspUnsafeInline(Detection):
     category = "security_headers"
     severity_default = 400
     cwe = "CWE-693"
-    tags: tuple[str, ...] = ("csp", "unsafe-inline", "security-headers")
+    tags: ClassVar[tuple[str, ...]] = ("csp", "unsafe-inline", "security-headers")
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return _is_html(asset)
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
@@ -67,7 +68,7 @@ class HstsMissing(Detection):
     category = "security_headers"
     severity_default = 400
     cwe = "CWE-319"
-    tags: tuple[str, ...] = ("hsts", "tls", "security-headers")
+    tags: ClassVar[tuple[str, ...]] = ("hsts", "tls", "security-headers")
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return asset.scheme == "https" or asset.primary_scheme == "https"
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
@@ -85,7 +86,7 @@ class HstsShortMaxAge(Detection):
     category = "security_headers"
     severity_default = 200
     cwe = "CWE-319"
-    tags: tuple[str, ...] = ("hsts", "tls", "security-headers")
+    tags: ClassVar[tuple[str, ...]] = ("hsts", "tls", "security-headers")
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return asset.scheme == "https" or asset.primary_scheme == "https"
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
@@ -112,7 +113,7 @@ class XFrameOptionsMissing(Detection):
     category = "security_headers"
     severity_default = 300
     cwe = "CWE-1021"
-    tags: tuple[str, ...] = ("clickjacking", "x-frame-options", "security-headers")
+    tags: ClassVar[tuple[str, ...]] = ("clickjacking", "x-frame-options", "security-headers")
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return _is_html(asset)
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
@@ -134,7 +135,7 @@ class XContentTypeOptionsMissing(Detection):
     category = "security_headers"
     severity_default = 200
     cwe = "CWE-430"
-    tags: tuple[str, ...] = ("mime-sniffing", "x-content-type-options", "security-headers")
+    tags: ClassVar[tuple[str, ...]] = ("mime-sniffing", "x-content-type-options", "security-headers")
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return _is_html(asset)
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
@@ -154,7 +155,7 @@ class ReferrerPolicyMissing(Detection):
     category = "security_headers"
     severity_default = 100
     cwe = "CWE-200"
-    tags: tuple[str, ...] = ("referrer-policy", "information-disclosure", "security-headers")
+    tags: ClassVar[tuple[str, ...]] = ("referrer-policy", "information-disclosure", "security-headers")
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return _is_html(asset)
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:
@@ -172,7 +173,7 @@ class PermissionsPolicyMissing(Detection):
     category = "security_headers"
     severity_default = 100
     cwe = "CWE-693"
-    tags: tuple[str, ...] = ("permissions-policy", "feature-policy", "security-headers")
+    tags: ClassVar[tuple[str, ...]] = ("permissions-policy", "feature-policy", "security-headers")
     def applicable_to(self, asset: Asset, fingerprints: list[FingerprintResult]) -> bool:
         return _is_html(asset)
     async def run(self, asset: Asset, ctx: DetectionContext) -> AsyncGenerator[FindingDraft, None]:

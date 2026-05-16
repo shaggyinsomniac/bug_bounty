@@ -409,3 +409,32 @@ LLM suggestions are shown in a panel; the operator clicks **Apply** / **Accept C
 - Responses are cached on disk for 30 days (keyed by sha256 of system + prompt).
 - LLM suggestions **never auto-apply** — operator confirmation is always required.
 - Enable/disable globally via `AI_ENABLED=false` in `.env`.
+
+## Recon Toolbox (Phase 16)
+Phase 16 adds passive recon enrichment commands and ~26 new detection checks.
+### CLI Commands
+```bash
+# WHOIS lookup for a domain
+bounty whois example.com
+# ASN / org / CIDR lookup for an IP
+bounty asn 8.8.8.8
+# Compute Shodan-style mmh3 favicon hash
+bounty favicon-hash https://example.com
+# Find resolving TLD variants of a domain label
+bounty related-tlds example
+```
+Results are stored in the `recon_enrichment` table (schema v14) and the
+`favicon_mmh3` column on `assets`.
+### Detection Categories Added
+| Category | Detections |
+|---|---|
+| Security Headers | Missing CSP, unsafe-inline CSP, missing/weak HSTS, missing X-Frame-Options, missing X-Content-Type-Options, missing Referrer-Policy, missing Permissions-Policy (8) |
+| Cookies | Missing Secure flag, missing HttpOnly flag, missing SameSite attribute (3) |
+| TLS Deep | Weak protocols (TLS 1.0/1.1), weak ciphers (RC4/DES/EXPORT), expired cert, self-signed cert, hostname mismatch (5) |
+| Open Redirect | Reflected parameter redirect (1) |
+| Clickjacking | Missing frame-protection headers (1) |
+| Mixed Content | HTTP resources on HTTPS pages (1) |
+| Default Files | Default pages, install scripts, exposed package.json (3) |
+| Header Info Disclosure | X-Powered-By, Server header, internal IP leak (3) |
+| WebSocket Detection | Unencrypted WS upgrade (1) |
+**Total new detections: ~26** (registered count: 132)
