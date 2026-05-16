@@ -25,6 +25,7 @@ from bounty.ui.routes import (
     system,
 )
 from bounty.ui.routes.pages import router as pages_router
+from bounty.ui.routes.system import seed_router
 
 router = APIRouter()
 
@@ -37,6 +38,7 @@ router.include_router(programs.router)
 router.include_router(secrets.router)
 router.include_router(reports.router)
 router.include_router(system.router)
+router.include_router(seed_router)
 router.include_router(palette.router)
 router.include_router(intel.router)
 router.include_router(sse_routes.router)

@@ -1103,6 +1103,26 @@ def init_db(db_path: Path) -> None:
 
         conn.commit()
         log.info("database_initialised", path=str(db_path))
+
+        # Auto-seed on first run: if programs table is empty and setting is enabled,
+        # insert the built-in seed programs so the UI shows something useful.
+        try:
+            from bounty.config import get_settings as _get_settings
+            _settings = _get_settings()
+            if _settings.auto_seed_on_empty_db:
+                _row = conn.execute("SELECT COUNT(*) FROM programs").fetchone()
+                if _row is not None and _row[0] == 0:
+                    from bounty.seed import SEED_PROGRAMS as _SEED_PROGRAMS
+                    from bounty.seed import seed_sync as _seed_sync
+                    _result = _seed_sync(db_path)
+                    log.info(
+                        "seeded_first_run",
+                        inserted=_result["inserted"],
+                        programs=_result["programs"],
+                    )
+        except Exception as _exc:  # noqa: BLE001
+            # Never let seed failures block DB initialisation.
+            log.warning("auto_seed_failed", error=str(_exc))
     finally:
         conn.close()
 

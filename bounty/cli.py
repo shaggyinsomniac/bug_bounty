@@ -2915,6 +2915,64 @@ def errors_purge_cmd(
 
 
 # ---------------------------------------------------------------------------
+# seed
+# ---------------------------------------------------------------------------
+
+@app.command("seed")
+def seed_cmd(
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Re-insert seed programs even if they already exist (delete + insert)."),
+    ] = False,
+    list_only: Annotated[
+        bool,
+        typer.Option("--list", help="Print what would be seeded without inserting anything."),
+    ] = False,
+    db: Annotated[Path | None, typer.Option("--db")] = None,
+) -> None:
+    """Seed the database with built-in example programs.
+
+    On a fresh install the database is auto-seeded at startup. Use this
+    command to preview (--list), reset (--force), or manually seed after
+    disabling auto_seed_on_empty_db.
+    """
+    from bounty.seed import SEED_PROGRAMS, seed_database
+
+    if list_only:
+        typer.echo("[bounty seed] Programs that would be seeded:")
+        for prog in SEED_PROGRAMS:
+            typer.echo(f"  id={prog['id']!r}  name={prog['name']!r}  handle={prog['handle']!r}")
+            for t in prog["targets"]:
+                typer.echo(f"    [{t['scope_type']}] {t['asset_type']}  {t['value']}")
+            if prog["description"]:
+                # wrap at 72 chars
+                desc = prog["description"]
+                typer.echo(f"    desc: {desc[:72]}{'…' if len(desc) > 72 else ''}")
+        typer.echo(f"\n{len(SEED_PROGRAMS)} program(s) would be seeded.")
+        return
+
+    settings = get_settings()
+    db_path = db or settings.db_path
+    init_db(db_path)
+    apply_migrations(db_path)
+
+    try:
+        result = asyncio.run(seed_database(db_path, force=force))
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] seed failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"[bounty seed] inserted={result['inserted']}  skipped={result['skipped']}"
+    )
+    for name in result["programs"]:
+        typer.echo(f"  ✓ {name}")
+    if result["skipped"]:
+        tip = "--force" if not force else "(already forced)"
+        typer.echo(f"  {result['skipped']} program(s) skipped (already exist). Use {tip} to re-seed.")
+
+
+# ---------------------------------------------------------------------------
 # Entry point — must be AFTER all command registrations so every sub-app
 # (including errors_app) has its commands registered before app() is called.
 # ---------------------------------------------------------------------------

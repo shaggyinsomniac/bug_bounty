@@ -39,9 +39,16 @@ def _now() -> str:
 
 @pytest.fixture()
 def test_db(tmp_path: Path) -> Path:
+    from bounty.config import get_settings as _gs
     db = tmp_path / "bounty.db"
-    init_db(db)
-    apply_migrations(db)
+    _gs.cache_clear()
+    os.environ["AUTO_SEED_ON_EMPTY_DB"] = "false"
+    try:
+        init_db(db)
+        apply_migrations(db)
+    finally:
+        os.environ.pop("AUTO_SEED_ON_EMPTY_DB", None)
+        _gs.cache_clear()
     return db
 
 

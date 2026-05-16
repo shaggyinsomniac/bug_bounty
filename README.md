@@ -6,6 +6,45 @@ A personal, single-operator tool for automating reconnaissance and triage in eth
 
 ---
 
+## First Run
+
+When you install **bounty** and start the server (or run `bounty init-db`) with
+an empty database, three example programs are automatically seeded so the UI
+shows something useful immediately:
+
+| Program | Handle | Scope |
+|---|---|---|
+| HackerOne (practice) | `hackerone-practice` | `hackerone.com` |
+| Bugcrowd VRT reference | `bugcrowd-reference` | `bugcrowd.com` |
+| Local synthetic target | `localhost-synthetic` | `http://127.0.0.1:8765` |
+
+### Managing seed data
+
+```bash
+# Preview what would be seeded (read-only, nothing inserted)
+bounty seed --list
+
+# Manually seed (safe to run multiple times — idempotent)
+bounty seed
+
+# Reset seed programs to defaults (deletes existing seeds, re-inserts)
+bounty seed --force
+
+# Inspect what's in the DB
+sqlite3 data/bounty.db "SELECT id, name FROM programs;"
+```
+
+### Disabling auto-seed
+
+Add the following to your `.env` file to prevent automatic seeding on fresh
+databases:
+
+```ini
+AUTO_SEED_ON_EMPTY_DB=false
+```
+
+---
+
 ## Quick Start
 
 ```bash

@@ -23,6 +23,9 @@ from bounty.ui.deps import ApiAuthDep, DbPathDep
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
+# Stand-alone router for /api/seed (not under /api/system prefix)
+seed_router = APIRouter(tags=["seed"])
+
 
 # ---------------------------------------------------------------------------
 # Info
@@ -157,4 +160,32 @@ async def write_setting(
         raise HTTPException(status_code=500, detail=f"Could not write .env: {exc}") from exc
 
     return JSONResponse({"status": "ok", "key": body.key.upper()})
+
+
+# ---------------------------------------------------------------------------
+# POST /api/seed  (Phase 18 — first-run seed endpoint)
+# ---------------------------------------------------------------------------
+
+@seed_router.post("/api/seed")
+async def seed_endpoint(
+    db_path: DbPathDep,
+    _auth: ApiAuthDep,
+) -> JSONResponse:
+    """Insert built-in seed programs (idempotent — skips existing programs).
+
+    Returns ``{"inserted": N, "skipped": N}``.
+    """
+    from bounty.seed import seed_database
+
+    try:
+        result = await seed_database(db_path, force=False)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Seed failed: {exc}") from exc
+
+    return JSONResponse({
+        "inserted": result["inserted"],
+        "skipped": result["skipped"],
+        "programs": result.get("programs", []),
+    })
+
 

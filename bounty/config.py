@@ -240,6 +240,11 @@ class Settings(BaseSettings):
     Install sentry-sdk to activate: pip install sentry-sdk.
     Set via SENTRY_DSN environment variable."""
 
+    # --------------------------------------------------------- seed / first-run (Phase 18)
+    auto_seed_on_empty_db: bool = True
+    """Automatically seed 3 example programs on first run when the programs table is empty.
+    Set to False in .env (AUTO_SEED_ON_EMPTY_DB=false) to disable."""
+
     # --------------------------------------------------------- validators
     @field_validator("default_intensity")
     @classmethod
