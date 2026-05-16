@@ -10,6 +10,7 @@ from bounty.ui.routes import (
     ai,
     assets,
     dashboard,
+    errors,
     findings,
     integrations,
     intel,
@@ -43,3 +44,4 @@ router.include_router(schedules.router)
 router.include_router(queue.router)
 router.include_router(integrations.router)
 router.include_router(ai.router)
+router.include_router(errors.router)

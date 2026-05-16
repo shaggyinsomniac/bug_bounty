@@ -23,6 +23,7 @@ _QUICK_ACTIONS: list[dict[str, str]] = [
     {"label": "New Report", "url": "/reports", "icon": "📄", "action": "link"},
     {"label": "New Program", "url": "/programs", "icon": "🎯", "action": "modal"},
     {"label": "Go to Dashboard", "url": "/", "icon": "📊", "action": "link"},
+    {"label": "Errors (24h)", "url": "/errors?since=24h", "icon": "⚠️", "action": "link"},
     {"label": "Settings", "url": "/settings", "icon": "⚙️", "action": "link"},
 ]
 

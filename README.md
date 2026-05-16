@@ -438,3 +438,51 @@ Results are stored in the `recon_enrichment` table (schema v14) and the
 | Header Info Disclosure | X-Powered-By, Server header, internal IP leak (3) |
 | WebSocket Detection | Unencrypted WS upgrade (1) |
 **Total new detections: ~26** (registered count: 132)
+
+## Error Visibility (Phase 17)
+
+Phase 17 adds centralised scan error recording so operators can see exactly
+what went wrong during any scan — without needing to dig through log files.
+
+### How it works
+Every instrumented subsystem (detection runner, recon probe, fingerprinting,
+secret validation, Nuclei, TruffleHog, AI client, integrations notifier,
+queue worker) wraps critical code in `try/except` and calls `record_error()`,
+which stores a row in the `scan_errors` table (schema v15+).
+`record_error` **never raises** — any internal failure is swallowed and
+logged at warning level only.
+
+### UI page
+Browse, filter and inspect errors at **`/errors`** in the web UI.
+- Filter by kind, scan ID, exception type, and time window
+- Click any row to open a drawer with the full Python traceback
+- Kind breakdown chart on the right sidebar
+
+### CLI commands
+```bash
+# List errors from the last 24 h (default)
+bounty errors list
+
+# Filter to a specific kind and time window
+bounty errors list --kind nuclei --since 7d
+
+# Show a single error with full traceback
+bounty errors show <error-id>
+
+# Dry-run purge (shows count, no deletion)
+bounty errors purge --older-than 30d
+
+# Confirm purge
+bounty errors purge --older-than 30d --confirm
+```
+
+### Dashboard
+The dashboard **Errors (24h)** stat card shows the total number of errors
+recorded in the last 24 hours. Asset detail pages include a Reliability
+section listing recent errors for that specific asset.
+
+### Optional Sentry integration
+Set the `SENTRY_DSN` environment variable (or `sentry_dsn` in your config)
+to forward every recorded error to a Sentry project. The `sentry-sdk`
+package is an **optional** dependency — the system works without it installed.
+

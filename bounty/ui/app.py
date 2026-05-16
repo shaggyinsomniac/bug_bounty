@@ -179,3 +179,13 @@ from bounty.ui.routes.pages import set_templates as _pages_set_templates
 app.include_router(main_router)
 _pages_set_templates(templates)
 
+
+def create_app() -> FastAPI:
+    """Application factory — returns the singleton ``app`` instance.
+
+    Provided for test clients and environments that use the factory pattern.
+    The returned app shares state with the module-level ``app`` object.
+    """
+    return app
+
+

@@ -374,6 +374,7 @@ async def _run_fingerprint_phase(
     asset_ids: list[str],
     probe_fn: Any,
     bound_log: Any,
+    scan_id: str = "",
 ) -> None:
     """Run fingerprint_asset for every asset in ``asset_ids`` (concurrency=50).
 
@@ -457,6 +458,13 @@ async def _run_fingerprint_phase(
                     bound_log.warning(
                         "fingerprint_phase_error", asset_id=asset_id, error=str(exc)
                     )
+                if scan_id:
+                    try:
+                        from bounty.errors import record_error as _rec_err
+                        await _rec_err(db_path, scan_id, "fingerprint", exc,
+                                       asset_id=asset_id)
+                    except Exception:  # noqa: BLE001
+                        pass
 
     await _asyncio.gather(*[_fp_one(aid) for aid in asset_ids], return_exceptions=True)
 
@@ -702,6 +710,11 @@ async def _run_detect_phase(
                     bound_log.warning(
                         "detect_phase_error", asset_id=asset_id, error=str(exc)
                     )
+                try:
+                    from bounty.errors import record_error as _rec_err
+                    await _rec_err(db_path, scan_id, "detection", exc, asset_id=asset_id)
+                except Exception:  # noqa: BLE001
+                    pass
             return found
 
     results = await _asyncio.gather(
@@ -905,6 +918,11 @@ async def recon_pipeline(
                     break
                 except Exception as exc:  # noqa: BLE001
                     bound_log.error("subfinder_error", domain=domain, error=str(exc))
+                    try:
+                        from bounty.errors import record_error as _rec_err
+                        await _rec_err(effective_db, scan_id, "probe", exc)
+                    except Exception:  # noqa: BLE001
+                        pass
 
             bound_log.info("enumeration_done", hosts=len(discovered_hosts))
 
@@ -1218,7 +1236,8 @@ async def recon_pipeline(
         if unique_asset_ids:
             await _update_scan_phase(effective_db, scan_id, "fingerprint", "running")
             await _run_fingerprint_phase(
-                effective_db, program_id, unique_asset_ids, probe_fn=probe, bound_log=bound_log
+                effective_db, program_id, unique_asset_ids, probe_fn=probe, bound_log=bound_log,
+                scan_id=scan_id,
             )
             await _update_scan_phase(
                 effective_db, scan_id, "fingerprint", "completed",
@@ -1247,6 +1266,11 @@ async def recon_pipeline(
     except Exception as exc:  # noqa: BLE001
         pipeline_error = str(exc)
         bound_log.error("recon_pipeline_error", error=pipeline_error, exc_info=True)
+        try:
+            from bounty.errors import record_error as _rec_err
+            await _rec_err(effective_db, scan_id, "probe", exc)
+        except Exception:  # noqa: BLE001
+            pass
     finally:
         # Always update scan status so the row reflects final state
         final_status = "failed" if pipeline_error else "completed"

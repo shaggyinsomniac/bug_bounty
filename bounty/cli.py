@@ -51,6 +51,9 @@ app.add_typer(secrets_app, name="secrets")
 tools_app = typer.Typer(help="Manage external tool binaries (trufflehog, etc.).")
 app.add_typer(tools_app, name="tools")
 
+errors_app = typer.Typer(help="Query and purge scan error records (Phase 17).")
+app.add_typer(errors_app, name="errors")
+
 log = get_logger(__name__)
 
 _INTENSITY_CHOICES = ("gentle", "normal", "aggressive")
@@ -2762,6 +2765,159 @@ def related_tlds_cmd(
         typer.echo(f"[error] {exc}", err=True)
         raise typer.Exit(1)
 
+
+if __name__ == "__main__":  # pragma: no cover
+    pass  # entry point is at the bottom of the file, after all commands are registered
+
+
+# ---------------------------------------------------------------------------
+# errors_app — Phase 17: scan error visibility
+# ---------------------------------------------------------------------------
+
+def _parse_since_duration(since: str) -> str:
+    """Convert '1h', '24h', '7d', '30d' to an ISO cutoff string."""
+    from datetime import timedelta
+    mapping = {
+        "1h":  timedelta(hours=1),
+        "24h": timedelta(hours=24),
+        "7d":  timedelta(days=7),
+        "30d": timedelta(days=30),
+    }
+    from datetime import datetime, timezone
+    delta = mapping.get(since)
+    if delta:
+        return (datetime.now(tz=timezone.utc) - delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Assume ISO datetime
+    return since
+
+
+@errors_app.command("list")
+def errors_list_cmd(
+    kind: Annotated[str | None, typer.Option("--kind", help="Filter by kind")] = None,
+    since: Annotated[str, typer.Option("--since", help="Cutoff: 1h | 24h | 7d | 30d")] = "24h",
+    limit: Annotated[int, typer.Option("--limit", help="Max rows to show")] = 20,
+) -> None:
+    """List recent scan errors."""
+    import sqlite3 as _sqlite3
+
+    settings = get_settings()
+    db_path = settings.db_path
+    cutoff = _parse_since_duration(since)
+
+    clauses: list[str] = ["created_at >= ?"]
+    params: list[Any] = [cutoff]
+    if kind:
+        clauses.append("kind = ?")
+        params.append(kind)
+    where = "WHERE " + " AND ".join(clauses)
+    params.append(limit)
+
+    try:
+        conn = _sqlite3.connect(str(db_path))
+        conn.row_factory = _sqlite3.Row
+        cur = conn.execute(
+            f"SELECT id, created_at, kind, exception_type, message, scan_id, asset_id"
+            f" FROM scan_errors {where} ORDER BY created_at DESC LIMIT ?",
+            params,
+        )
+        rows = cur.fetchall()
+        conn.close()
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not rows:
+        typer.echo(f"No errors found since {since}.")
+        return
+
+    # Simple text table
+    header = f"{'TIMESTAMP':<20} {'KIND':<16} {'EXCEPTION':<24} {'MESSAGE':<50}"
+    typer.echo(header)
+    typer.echo("-" * len(header))
+    for r in rows:
+        ts = str(r["created_at"] or "")[: 19]
+        k = str(r["kind"] or "")[: 15]
+        et = str(r["exception_type"] or "")[: 23]
+        msg = str(r["message"] or "")[: 49]
+        typer.echo(f"{ts:<20} {k:<16} {et:<24} {msg:<50}")
+
+    typer.echo(f"\n{len(rows)} error(s) shown (since {since})")
+
+
+@errors_app.command("show")
+def errors_show_cmd(
+    error_id: Annotated[str, typer.Argument(help="Error record ID (ULID)")],
+) -> None:
+    """Show full traceback for an error record."""
+    import sqlite3 as _sqlite3
+
+    settings = get_settings()
+    db_path = settings.db_path
+    try:
+        conn = _sqlite3.connect(str(db_path))
+        conn.row_factory = _sqlite3.Row
+        cur = conn.execute("SELECT * FROM scan_errors WHERE id = ?", (error_id,))
+        row = cur.fetchone()
+        conn.close()
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not row:
+        typer.echo(f"Error record {error_id!r} not found.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"ID:             {row['id']}")
+    typer.echo(f"Kind:           {row['kind']}")
+    typer.echo(f"Exception:      {row['exception_type']}")
+    typer.echo(f"Timestamp:      {row['created_at']}")
+    typer.echo(f"Scan ID:        {row['scan_id'] or '—'}")
+    typer.echo(f"Asset ID:       {row['asset_id'] or '—'}")
+    typer.echo(f"Detection ID:   {row['detection_id'] or '—'}")
+    typer.echo(f"Message:        {row['message']}")
+    typer.echo(f"\n{'=' * 60} TRACEBACK\n")
+    typer.echo(row["traceback"] or "(no traceback)")
+
+
+@errors_app.command("purge")
+def errors_purge_cmd(
+    older_than: Annotated[str, typer.Option("--older-than", help="1h | 24h | 7d | 30d")] = "30d",
+    confirm: Annotated[bool, typer.Option("--confirm", help="Actually delete (dry-run without this)")] = False,
+) -> None:
+    """Delete error records older than the specified duration."""
+    import sqlite3 as _sqlite3
+
+    settings = get_settings()
+    db_path = settings.db_path
+    cutoff = _parse_since_duration(older_than)
+
+    try:
+        conn = _sqlite3.connect(str(db_path))
+        cnt_cur = conn.execute(
+            "SELECT COUNT(*) FROM scan_errors WHERE created_at < ?", (cutoff,)
+        )
+        cnt = cnt_cur.fetchone()[0]
+
+        if not confirm:
+            typer.echo(f"[dry-run] Would delete {cnt} error records older than {older_than} (cutoff: {cutoff}).")
+            typer.echo("Re-run with --confirm to apply.")
+            conn.close()
+            return
+
+        conn.execute("DELETE FROM scan_errors WHERE created_at < ?", (cutoff,))
+        conn.commit()
+        conn.close()
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Deleted {cnt} error records older than {older_than}.")
+
+
+# ---------------------------------------------------------------------------
+# Entry point — must be AFTER all command registrations so every sub-app
+# (including errors_app) has its commands registered before app() is called.
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":  # pragma: no cover
     app()

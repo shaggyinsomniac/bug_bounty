@@ -64,5 +64,15 @@ async def dashboard_stats(
         except Exception:  # noqa: BLE001
             stats["queue_depth"] = 0
 
+        try:
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM scan_errors"
+                " WHERE created_at > strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','-1 day'))"
+            )
+            row = await cur.fetchone()
+            stats["errors_24h"] = row[0] if row else 0
+        except Exception:  # noqa: BLE001
+            stats["errors_24h"] = 0
+
     return JSONResponse(stats)
 

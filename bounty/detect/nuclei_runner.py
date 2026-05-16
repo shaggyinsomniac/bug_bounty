@@ -333,6 +333,8 @@ class NucleiRunner:
         asset: Any,
         fingerprints: list[Any],
         severities: Sequence[str] = ("medium", "high", "critical"),
+        db_path: Path | None = None,
+        scan_id: str = "",
     ) -> list[NucleiFinding]:
         """Scan an asset with Nuclei and return parsed findings.
 
@@ -390,6 +392,16 @@ class NucleiRunner:
                     timeout=self.timeout,
                     target=target_url,
                 )
+                if db_path and scan_id:
+                    try:
+                        from bounty.errors import record_error as _rec_err
+                        _to_exc = TimeoutError(
+                            f"nuclei timed out after {self.timeout}s on {target_url}"
+                        )
+                        await _rec_err(db_path, scan_id, "nuclei", _to_exc,
+                                       asset_id=str(getattr(asset, "id", "") or ""))
+                    except Exception:  # noqa: BLE001
+                        pass
                 return []
 
             if stderr_bytes:
@@ -437,5 +449,12 @@ class NucleiRunner:
                 error=str(exc),
                 target=target_url,
             )
+            if db_path and scan_id:
+                try:
+                    from bounty.errors import record_error as _rec_err
+                    await _rec_err(db_path, scan_id, "nuclei", exc,
+                                   asset_id=str(getattr(asset, "id", "") or ""))
+                except Exception:  # noqa: BLE001
+                    pass
             return []
 

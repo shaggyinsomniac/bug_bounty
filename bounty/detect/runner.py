@@ -243,7 +243,31 @@ async def run_detections(
 
         except DetectionError as exc:
             det_log.warning("detection_error", error=str(exc))
+            try:
+                from bounty.errors import record_error as _rec_err
+                await _rec_err(
+                    db_path=db_path,
+                    scan_id=ctx.scan_id or "",
+                    kind="detection",
+                    exception=exc,
+                    asset_id=asset.id or "",
+                    detection_id=detection.id,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         except Exception as exc:  # noqa: BLE001
             det_log.warning("detection_unexpected_error", error=str(exc), exc_info=True)
+            try:
+                from bounty.errors import record_error as _rec_err
+                await _rec_err(
+                    db_path=db_path,
+                    scan_id=ctx.scan_id or "",
+                    kind="detection",
+                    exception=exc,
+                    asset_id=asset.id or "",
+                    detection_id=detection.id,
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
 

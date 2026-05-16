@@ -217,6 +217,14 @@ class QueueWorker:
                 exc = task.exception()
                 if exc:
                     logger.exception("Worker task unhandled error", exc_info=exc)
+                    try:
+                        from bounty.errors import record_error as _rec_err
+                        import asyncio as _asyncio
+                        _asyncio.create_task(
+                            _rec_err(self._db_path, "", "scheduler", exc)
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
 
         while len(self._running) < self._max_concurrent:
             entry = await self._fetch_next()
@@ -328,6 +336,11 @@ class QueueWorker:
 
         except Exception as exc:  # noqa: BLE001
             logger.exception("Entry %s failed: %s", entry.id, exc)
+            try:
+                from bounty.errors import record_error as _rec_err
+                await _rec_err(self._db_path, scan_id, "queue_worker", exc)
+            except Exception:  # noqa: BLE001
+                pass
             await self._handle_failure(entry, str(exc))
 
     async def _finish(

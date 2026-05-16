@@ -290,6 +290,8 @@ async def scan_with_trufflehog(
     text: str | bytes,
     binary_path: Path | None = None,
     timeout: int = 60,
+    db_path: Path | None = None,
+    scan_id: str = "",
 ) -> list[TrufflehogResult]:
     """Scan text for secrets using the TruffleHog binary.
 
@@ -361,6 +363,15 @@ async def scan_with_trufflehog(
                     "trufflehog_timeout",
                     timeout=effective_timeout,
                 )
+                if db_path and scan_id:
+                    try:
+                        from bounty.errors import record_error as _rec_err
+                        _to_exc = TimeoutError(
+                            f"trufflehog timed out after {effective_timeout}s"
+                        )
+                        await _rec_err(db_path, scan_id, "trufflehog", _to_exc)
+                    except Exception:  # noqa: BLE001
+                        pass
                 return []
 
             if stderr_bytes:
@@ -386,6 +397,12 @@ async def scan_with_trufflehog(
         return []
     except Exception as exc:  # noqa: BLE001
         log.warning("trufflehog_error", error=str(exc))
+        if db_path and scan_id:
+            try:
+                from bounty.errors import record_error as _rec_err
+                await _rec_err(db_path, scan_id, "trufflehog", exc)
+            except Exception:  # noqa: BLE001
+                pass
         return []
 
     log.debug("trufflehog_scan_complete", results=len(results))

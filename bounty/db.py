@@ -331,6 +331,27 @@ _SCHEMA: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status)",
     "CREATE INDEX IF NOT EXISTS idx_leads_program ON leads(program_id)",
+    # ------------------------------------------------------------------
+    # scan_errors  (Phase 17 — operator error visibility)
+    # scan_id is intentionally NOT a FK so errors can be recorded for
+    # arbitrary / orphaned scan IDs without constraint violations.
+    # ------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS scan_errors (
+        id             TEXT PRIMARY KEY,
+        scan_id        TEXT,
+        asset_id       TEXT,
+        detection_id   TEXT,
+        kind           TEXT NOT NULL DEFAULT 'other',
+        exception_type TEXT,
+        message        TEXT,
+        traceback      TEXT,
+        created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_scan_errors_scan    ON scan_errors(scan_id)",
+    "CREATE INDEX IF NOT EXISTS idx_scan_errors_kind    ON scan_errors(kind)",
+    "CREATE INDEX IF NOT EXISTS idx_scan_errors_created ON scan_errors(created_at DESC)",
 ]
 
 # ---------------------------------------------------------------------------
@@ -936,6 +957,57 @@ CREATE TABLE IF NOT EXISTS ai_cache (
 COMMIT;
 """
 
+_MIGRATION_V16 = """
+BEGIN TRANSACTION;
+
+-- Phase 17 fix: recreate scan_errors without FK on scan_id so that
+-- error records can be inserted for arbitrary / orphaned scan IDs.
+CREATE TABLE IF NOT EXISTS scan_errors_v16 (
+    id             TEXT PRIMARY KEY,
+    scan_id        TEXT,
+    asset_id       TEXT,
+    detection_id   TEXT,
+    kind           TEXT NOT NULL DEFAULT 'other',
+    exception_type TEXT,
+    message        TEXT,
+    traceback      TEXT,
+    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+INSERT OR IGNORE INTO scan_errors_v16
+    SELECT id, scan_id, asset_id, detection_id, kind,
+           exception_type, message, traceback, created_at
+    FROM scan_errors;
+
+DROP TABLE IF EXISTS scan_errors;
+ALTER TABLE scan_errors_v16 RENAME TO scan_errors;
+
+COMMIT;
+"""
+
+_MIGRATION_V15 = """
+BEGIN TRANSACTION;
+
+-- scan_errors: per-scan error records for operator visibility (Phase 17).
+CREATE TABLE IF NOT EXISTS scan_errors (
+    id             TEXT PRIMARY KEY,
+    scan_id        TEXT REFERENCES scans(id) ON DELETE CASCADE,
+    asset_id       TEXT,
+    detection_id   TEXT,
+    kind           TEXT NOT NULL DEFAULT 'other',
+    exception_type TEXT,
+    message        TEXT,
+    traceback      TEXT,
+    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_errors_scan    ON scan_errors(scan_id);
+CREATE INDEX IF NOT EXISTS idx_scan_errors_kind    ON scan_errors(kind);
+CREATE INDEX IF NOT EXISTS idx_scan_errors_created ON scan_errors(created_at DESC);
+
+COMMIT;
+"""
+
 _MIGRATION_V14 = """
 BEGIN TRANSACTION;
 
@@ -993,6 +1065,10 @@ _MIGRATIONS: list[str] = [
     _MIGRATION_V13,
     # v14 (Phase 16) → add recon_enrichment table and favicon_mmh3 column.
     _MIGRATION_V14,
+    # v15 (Phase 17) → add scan_errors table for per-scan error visibility.
+    _MIGRATION_V15,
+    # v16 (Phase 17 fix) → recreate scan_errors without FK on scan_id.
+    _MIGRATION_V16,
 ]
 
 
@@ -1106,6 +1182,9 @@ def _recreate_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_targets_program ON targets(program_id)",
         "CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status)",
         "CREATE INDEX IF NOT EXISTS idx_leads_program ON leads(program_id)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_errors_scan    ON scan_errors(scan_id)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_errors_kind    ON scan_errors(kind)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_errors_created ON scan_errors(created_at DESC)",
     ]
     for stmt in index_stmts:
         try:

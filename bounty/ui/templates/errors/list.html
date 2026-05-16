@@ -1,0 +1,279 @@
+{% extends "_base.html" %}
+
+{% block title %}Errors{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Page header -->
+  <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <h1 class="text-2xl font-bold text-slate-100">Errors</h1>
+      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-900 text-amber-300">
+        {{ total }} total
+      </span>
+    </div>
+    <!-- Kind breakdown chips -->
+    <div class="flex flex-wrap gap-1.5">
+      {% for k, cnt in kind_breakdown.items() %}
+        {% if cnt > 0 %}
+          <a href="/errors?kind={{ k }}"
+             class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono
+                    {% if filters.kind == k %}bg-amber-600 text-white
+                    {% else %}bg-slate-700 text-slate-300 hover:bg-slate-600{% endif %}">
+            {{ k }}
+            <span class="opacity-75">{{ cnt }}</span>
+          </a>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Filter bar -->
+  <form method="get" action="/errors"
+        class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
+
+      <!-- kind dropdown -->
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Kind</label>
+        <select name="kind"
+                class="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <option value="">All kinds</option>
+          {% for k in ["detection","probe","fingerprint","secret_validation","notification","scheduler","queue_worker","nuclei","trufflehog","ai","other"] %}
+            <option value="{{ k }}" {% if filters.kind == k %}selected{% endif %}>{{ k }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- scan_id input -->
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Scan ID</label>
+        <input type="text" name="scan_id" value="{{ filters.scan_id }}"
+               placeholder="scan ULID…"
+               class="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+
+      <!-- exception_type input -->
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Exception type</label>
+        <input type="text" name="exception_type" value="{{ filters.exception_type }}"
+               placeholder="RuntimeError…"
+               class="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+
+      <!-- since selector -->
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Since</label>
+        <select name="since"
+                class="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <option value="">All time</option>
+          <option value="1h"  {% if filters.since == '1h'  %}selected{% endif %}>Last 1h</option>
+          <option value="24h" {% if filters.since == '24h' %}selected{% endif %}>Last 24h</option>
+          <option value="7d"  {% if filters.since == '7d'  %}selected{% endif %}>Last 7d</option>
+          <option value="30d" {% if filters.since == '30d' %}selected{% endif %}>Last 30d</option>
+        </select>
+      </div>
+
+      <!-- submit -->
+      <div>
+        <button type="submit"
+                class="w-full bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium py-1.5 px-3 rounded transition-colors">
+          Filter
+        </button>
+      </div>
+
+    </div>
+  </form>
+
+  <!-- Error table -->
+  <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden" id="errors-table-wrap">
+    {% if errors %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-400 uppercase border-b border-slate-700">
+            <th class="px-3 py-2 text-left w-36">Timestamp</th>
+            <th class="px-3 py-2 text-left w-28">Kind</th>
+            <th class="px-3 py-2 text-left w-36">Exception</th>
+            <th class="px-3 py-2 text-left">Message</th>
+            <th class="px-3 py-2 text-left w-28">Scan</th>
+            <th class="px-3 py-2 text-left w-28">Asset</th>
+            <th class="px-3 py-2 text-left w-24">Detection</th>
+          </tr>
+        </thead>
+        <tbody id="errors-tbody">
+          {% for e in errors %}
+            <tr class="border-b border-slate-700/50 hover:bg-slate-700/40 cursor-pointer"
+                onclick="openErrorDrawer('{{ e.id }}')">
+              <td class="px-3 py-2 text-xs text-slate-400 font-mono whitespace-nowrap">
+                {{ (e.created_at or '') | string | truncate(16, True, '') }}
+              </td>
+              <td class="px-3 py-2">
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono
+                  {% if e.kind == 'detection' %}bg-red-900 text-red-300
+                  {% elif e.kind in ['nuclei','trufflehog'] %}bg-orange-900 text-orange-300
+                  {% elif e.kind == 'ai' %}bg-purple-900 text-purple-300
+                  {% elif e.kind == 'notification' %}bg-yellow-900 text-yellow-300
+                  {% elif e.kind in ['scheduler','queue_worker'] %}bg-blue-900 text-blue-300
+                  {% else %}bg-slate-700 text-slate-300{% endif %}">
+                  {{ e.kind }}
+                </span>
+              </td>
+              <td class="px-3 py-2 text-xs text-slate-300 font-mono truncate max-w-[140px]"
+                  title="{{ e.exception_type }}">
+                {{ e.exception_type or '—' }}
+              </td>
+              <td class="px-3 py-2 text-xs text-slate-300 truncate max-w-xs"
+                  title="{{ e.message }}">
+                {{ (e.message or '') | truncate(100) }}
+              </td>
+              <td class="px-3 py-2 text-xs font-mono">
+                {% if e.scan_id %}
+                  <a href="/scans/{{ e.scan_id }}" class="text-blue-400 hover:underline"
+                     onclick="event.stopPropagation()">
+                    {{ e.scan_id[:8] }}…
+                  </a>
+                {% else %}
+                  <span class="text-slate-500">—</span>
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-xs font-mono">
+                {% if e.asset_id %}
+                  <a href="/assets/{{ e.asset_id }}" class="text-blue-400 hover:underline"
+                     onclick="event.stopPropagation()">
+                    {{ e.asset_id[:8] }}…
+                  </a>
+                {% else %}
+                  <span class="text-slate-500">—</span>
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-xs font-mono text-slate-400 truncate">
+                {{ (e.detection_id or '—') | truncate(12, True, '…') }}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <!-- Pagination -->
+      {% if total > limit %}
+        <div class="px-4 py-3 border-t border-slate-700 flex items-center justify-between text-sm text-slate-400">
+          <span>Showing {{ offset + 1 }}–{{ [offset + limit, total] | min }} of {{ total }}</span>
+          <div class="flex gap-2">
+            {% if offset > 0 %}
+              <a href="/errors?{{ query_string }}&offset={{ [offset - limit, 0] | max }}"
+                 class="px-3 py-1 bg-slate-700 rounded hover:bg-slate-600">← Prev</a>
+            {% endif %}
+            {% if offset + limit < total %}
+              <a href="/errors?{{ query_string }}&offset={{ offset + limit }}"
+                 class="px-3 py-1 bg-slate-700 rounded hover:bg-slate-600">Next →</a>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+
+    {% else %}
+      <div class="p-12 text-center text-slate-400">
+        <div class="text-4xl mb-3">✅</div>
+        <div class="text-lg font-medium text-slate-300 mb-1">No errors recorded</div>
+        <div class="text-sm">Errors captured during scans will appear here.</div>
+      </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- Error detail drawer -->
+<div id="error-drawer"
+     class="fixed inset-y-0 right-0 w-full max-w-2xl bg-slate-800 border-l border-slate-700
+            shadow-2xl z-50 transform translate-x-full transition-transform duration-200 overflow-y-auto"
+     x-data="{ open: false }" :class="open ? 'translate-x-0' : 'translate-x-full'">
+  <div class="p-6 space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-lg font-bold text-slate-100">Error Details</h2>
+      <button onclick="closeErrorDrawer()"
+              class="text-slate-400 hover:text-white text-xl">✕</button>
+    </div>
+    <div id="drawer-content" class="text-sm text-slate-300 space-y-3"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function openErrorDrawer(errorId) {
+    const resp = await fetch('/api/errors/' + errorId);
+    if (!resp.ok) return;
+    const e = await resp.json();
+
+    const kindColors = {
+      detection: 'text-red-300', nuclei: 'text-orange-300', trufflehog: 'text-orange-300',
+      ai: 'text-purple-300', notification: 'text-yellow-300',
+      scheduler: 'text-blue-300', queue_worker: 'text-blue-300',
+    };
+    const kc = kindColors[e.kind] || 'text-slate-300';
+
+    document.getElementById('drawer-content').innerHTML = `
+      <div class="grid grid-cols-2 gap-3">
+        <div><div class="text-xs text-slate-500 uppercase">Kind</div>
+             <div class="font-mono ${kc}">${e.kind || '—'}</div></div>
+        <div><div class="text-xs text-slate-500 uppercase">Exception</div>
+             <div class="font-mono text-slate-200">${e.exception_type || '—'}</div></div>
+        <div><div class="text-xs text-slate-500 uppercase">Timestamp</div>
+             <div class="font-mono text-slate-400 text-xs">${e.created_at || '—'}</div></div>
+        <div><div class="text-xs text-slate-500 uppercase">Scan ID</div>
+             ${e.scan_id ? `<a href="/scans/${e.scan_id}" class="text-blue-400 hover:underline font-mono text-xs">${e.scan_id}</a>` : '<span class="text-slate-500">—</span>'}</div>
+        ${e.asset_id ? `<div><div class="text-xs text-slate-500 uppercase">Asset ID</div><a href="/assets/${e.asset_id}" class="text-blue-400 hover:underline font-mono text-xs">${e.asset_id}</a></div>` : ''}
+        ${e.detection_id ? `<div><div class="text-xs text-slate-500 uppercase">Detection</div><div class="font-mono text-xs text-slate-300">${e.detection_id}</div></div>` : ''}
+      </div>
+      <div>
+        <div class="text-xs text-slate-500 uppercase mb-1">Message</div>
+        <div class="bg-slate-900 rounded p-2 text-sm text-slate-200 break-words">${escHtml(e.message || '')}</div>
+      </div>
+      ${e.traceback ? `
+      <div>
+        <div class="text-xs text-slate-500 uppercase mb-1">Traceback</div>
+        <pre class="bg-slate-900 rounded p-3 text-xs text-red-300 overflow-x-auto whitespace-pre-wrap font-mono">${escHtml(e.traceback)}</pre>
+      </div>` : ''}
+    `;
+
+    // Open drawer via Alpine
+    const drawer = document.getElementById('error-drawer');
+    drawer.__x && drawer.__x.$data ? (drawer.__x.$data.open = true) : drawer.classList.remove('translate-x-full');
+  }
+
+  function closeErrorDrawer() {
+    const drawer = document.getElementById('error-drawer');
+    drawer.__x && drawer.__x.$data ? (drawer.__x.$data.open = false) : drawer.classList.add('translate-x-full');
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // SSE: prepend new errors to table
+  document.addEventListener('DOMContentLoaded', () => {
+    const evSrc = new EventSource('/sse');
+    evSrc.addEventListener('errors.new', (ev) => {
+      try {
+        const d = JSON.parse(ev.data);
+        const tbody = document.getElementById('errors-tbody');
+        if (!tbody) return;
+        const tr = document.createElement('tr');
+        tr.className = 'border-b border-slate-700/50 bg-amber-900/20';
+        tr.innerHTML = `
+          <td class="px-3 py-2 text-xs text-slate-400 font-mono">now</td>
+          <td class="px-3 py-2"><span class="px-1.5 py-0.5 rounded text-xs font-mono bg-amber-900 text-amber-300">${escHtml(d.kind||'')}</span></td>
+          <td class="px-3 py-2 text-xs font-mono text-slate-300">${escHtml(d.exception_type||'')}</td>
+          <td class="px-3 py-2 text-xs text-slate-300">${escHtml((d.message_short||'').substring(0,100))}</td>
+          <td class="px-3 py-2 text-xs font-mono">${d.scan_id ? `<a href="/scans/${d.scan_id}" class="text-blue-400">${d.scan_id.substring(0,8)}…</a>` : '—'}</td>
+          <td class="px-3 py-2 text-xs font-mono">${d.asset_id ? `<a href="/assets/${d.asset_id}" class="text-blue-400">${d.asset_id.substring(0,8)}…</a>` : '—'}</td>
+          <td class="px-3 py-2 text-xs font-mono text-slate-400">—</td>
+        `;
+        tbody.prepend(tr);
+      } catch (_) {}
+    });
+  });
+</script>
+{% endblock %}
+

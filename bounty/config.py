@@ -234,6 +234,12 @@ class Settings(BaseSettings):
     adaptive_rate_enabled: bool = True
     """Enable the adaptive per-host rate manager (back-off on 429/403, recover on success)."""
 
+    # --------------------------------------------------------- error visibility (Phase 17)
+    sentry_dsn: str | None = None
+    """Optional Sentry DSN.  When set, all recorded errors are also sent to Sentry.
+    Install sentry-sdk to activate: pip install sentry-sdk.
+    Set via SENTRY_DSN environment variable."""
+
     # --------------------------------------------------------- validators
     @field_validator("default_intensity")
     @classmethod

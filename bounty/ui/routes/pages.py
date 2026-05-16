@@ -131,6 +131,26 @@ async def dashboard(
         )
         recent_findings = [_finding_row_p(r) for r in await cur.fetchall()]
 
+        # Phase 17: errors (24h)
+        try:
+            e_cur = await conn.execute(
+                "SELECT COUNT(*) FROM scan_errors"
+                " WHERE created_at > strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','-1 day'))"
+            )
+            e_row = await e_cur.fetchone()
+            stats["errors_24h"] = e_row[0] if e_row else 0
+        except Exception:  # noqa: BLE001
+            stats["errors_24h"] = 0
+
+        try:
+            q_cur = await conn.execute(
+                "SELECT COUNT(*) FROM scan_queue WHERE status IN ('queued','running')"
+            )
+            q_row = await q_cur.fetchone()
+            stats["queue_depth"] = q_row[0] if q_row else 0
+        except Exception:  # noqa: BLE001
+            stats["queue_depth"] = 0
+
     return _tmpl(request, "dashboard.html", {
         "stats": stats,
         "recent_scans": recent_scans,
@@ -377,11 +397,41 @@ async def asset_detail(
         )
         findings = [_finding_row_p(r) for r in await find_cur.fetchall()]
 
+        # Phase 17: reliability data from scan_errors (last 30d)
+        reliability: dict[str, Any] = {
+            "error_count_30d": 0,
+            "last_error_at": None,
+            "last_error_message": None,
+            "last_error_kind": None,
+        }
+        try:
+            re_cnt_cur = await conn.execute(
+                "SELECT COUNT(*) FROM scan_errors"
+                " WHERE asset_id=? AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','-30 days'))",
+                (asset_id,),
+            )
+            re_cnt_row = await re_cnt_cur.fetchone()
+            reliability["error_count_30d"] = re_cnt_row[0] if re_cnt_row else 0
+
+            re_last_cur = await conn.execute(
+                "SELECT kind, message, created_at FROM scan_errors"
+                " WHERE asset_id=? ORDER BY created_at DESC LIMIT 1",
+                (asset_id,),
+            )
+            re_last = await re_last_cur.fetchone()
+            if re_last:
+                reliability["last_error_at"] = re_last["created_at"]
+                reliability["last_error_message"] = re_last["message"]
+                reliability["last_error_kind"] = re_last["kind"]
+        except Exception:  # noqa: BLE001
+            pass
+
     return _tmpl(request, "assets/detail.html", {
         "asset": asset,
         "fingerprints": fingerprints,
         "findings_count": findings_count,
         "findings": findings,
+        "reliability": reliability,
     })
 
 
@@ -1015,6 +1065,116 @@ async def queue_page(
         queue_entries = [{k: row[k] for k in row.keys()} for row in rows]
 
     return _tmpl(request, "queue/list.html", {"queue_entries": queue_entries})
+
+
+# ---------------------------------------------------------------------------
+# Errors page (Phase 17)
+# ---------------------------------------------------------------------------
+
+@router.get("/errors", response_class=HTMLResponse)
+async def errors_page(
+    request: Request,
+    db_path: DbPathDep,
+    _auth: PageAuthDep,
+    kind: str | None = Query(default=None),
+    scan_id: str | None = Query(default=None),
+    asset_id: str | None = Query(default=None),
+    exception_type: str | None = Query(default=None),
+    since: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> Response:
+    """Errors list page."""
+    from datetime import datetime, timedelta, timezone
+
+    def _parse_since_ts(s: str | None) -> str | None:
+        if not s:
+            return None
+        mapping = {"1h": timedelta(hours=1), "24h": timedelta(hours=24),
+                   "7d": timedelta(days=7), "30d": timedelta(days=30)}
+        delta = mapping.get(s)
+        if delta:
+            return (datetime.now(tz=timezone.utc) - delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, TypeError):
+            return None
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if kind:
+        clauses.append("kind = ?")
+        params.append(kind)
+    if scan_id:
+        clauses.append("scan_id = ?")
+        params.append(scan_id)
+    if asset_id:
+        clauses.append("asset_id = ?")
+        params.append(asset_id)
+    if exception_type:
+        clauses.append("exception_type LIKE ?")
+        params.append(f"%{exception_type}%")
+    cutoff = _parse_since_ts(since)
+    if cutoff:
+        clauses.append("created_at >= ?")
+        params.append(cutoff)
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    count_params = list(params)
+    params_page = list(params) + [limit, offset]
+
+    async with get_conn(db_path) as conn:
+        # Kind breakdown (all time, for chips)
+        kc_cur = await conn.execute("SELECT kind, COUNT(*) FROM scan_errors GROUP BY kind")
+        kind_breakdown: dict[str, int] = {}
+        for kr in await kc_cur.fetchall():
+            kind_breakdown[str(kr[0])] = int(kr[1])
+
+        cnt_cur = await conn.execute(f"SELECT COUNT(*) FROM scan_errors {where}", count_params)
+        cnt_row = await cnt_cur.fetchone()
+        total: int = cnt_row[0] if cnt_row else 0
+
+        cur = await conn.execute(
+            f"""SELECT id, scan_id, asset_id, detection_id, kind,
+                exception_type, message, created_at
+                FROM scan_errors {where}
+                ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+            params_page,
+        )
+        errors_list = [{k: r[k] for k in r.keys()} for r in await cur.fetchall()]
+
+    # Build query string for pagination links (excluding offset)
+    qs_parts: list[str] = []
+    if kind:
+        qs_parts.append(f"kind={kind}")
+    if scan_id:
+        qs_parts.append(f"scan_id={scan_id}")
+    if asset_id:
+        qs_parts.append(f"asset_id={asset_id}")
+    if exception_type:
+        qs_parts.append(f"exception_type={exception_type}")
+    if since:
+        qs_parts.append(f"since={since}")
+    if limit != 50:
+        qs_parts.append(f"limit={limit}")
+    query_string = "&".join(qs_parts)
+
+    return _tmpl(request, "errors/list.html", {
+        "errors": errors_list,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "kind_breakdown": kind_breakdown,
+        "query_string": query_string,
+        "filters": {
+            "kind": kind or "",
+            "scan_id": scan_id or "",
+            "asset_id": asset_id or "",
+            "exception_type": exception_type or "",
+            "since": since or "",
+        },
+    })
 
 
 

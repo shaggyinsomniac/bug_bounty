@@ -114,6 +114,8 @@ async def _safe_notify(
     notifier: Any,
     event_name: str,
     payload: dict[str, Any],
+    db_path: Any = None,
+    scan_id: str = "",
 ) -> None:
     """Call notifier.notify(), catching all exceptions to protect the event loop."""
     try:
@@ -126,6 +128,12 @@ async def _safe_notify(
             "integration_notify_failed",
             extra={"platform": platform, "event": event_name, "error": str(exc)},
         )
+        if db_path is not None:
+            try:
+                from bounty.errors import record_error as _rec_err
+                await _rec_err(db_path, scan_id, "notification", exc)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 async def _handle_finding_event(
@@ -135,6 +143,8 @@ async def _handle_finding_event(
 ) -> None:
     """Fan out a single finding event to all enabled, threshold-passing notifiers."""
     severity = str(payload.get("severity_label", "info")).lower()
+    _event_scan_id: str = str(payload.get("scan_id") or "")
+    _event_db_path: Any = getattr(settings, "db_path", None)
 
     quiet_start: str | None = getattr(settings, "notification_quiet_start", None)
     quiet_end: str | None = getattr(settings, "notification_quiet_end", None)
@@ -150,7 +160,8 @@ async def _handle_finding_event(
     if discord_url and _meets_threshold(severity, discord_threshold):
         from bounty.integrations.discord import DiscordNotifier
         notifier = DiscordNotifier(webhook_url=discord_url)
-        tasks.append(asyncio.create_task(_safe_notify("discord", notifier, event_name, payload)))
+        tasks.append(asyncio.create_task(_safe_notify("discord", notifier, event_name, payload,
+                                                       db_path=_event_db_path, scan_id=_event_scan_id)))
 
     # --- Slack ---
     slack_url: str | None = getattr(settings, "slack_webhook_url", None)
@@ -158,7 +169,8 @@ async def _handle_finding_event(
     if slack_url and _meets_threshold(severity, slack_threshold):
         from bounty.integrations.slack import SlackNotifier
         notifier_s = SlackNotifier(webhook_url=slack_url)
-        tasks.append(asyncio.create_task(_safe_notify("slack", notifier_s, event_name, payload)))
+        tasks.append(asyncio.create_task(_safe_notify("slack", notifier_s, event_name, payload,
+                                                       db_path=_event_db_path, scan_id=_event_scan_id)))
 
     # --- Jira ---
     jira_url: str | None = getattr(settings, "jira_base_url", None)
@@ -176,7 +188,8 @@ async def _handle_finding_event(
             project_key=jira_project,
             db_path=db_path,
         )
-        tasks.append(asyncio.create_task(_safe_notify("jira", notifier_j, event_name, payload)))
+        tasks.append(asyncio.create_task(_safe_notify("jira", notifier_j, event_name, payload,
+                                                       db_path=_event_db_path, scan_id=_event_scan_id)))
 
     # --- Linear ---
     linear_token: str | None = getattr(settings, "linear_api_token", None)
@@ -185,7 +198,8 @@ async def _handle_finding_event(
     if linear_token and linear_team and _meets_threshold(severity, linear_threshold):
         from bounty.integrations.linear import LinearNotifier
         notifier_l = LinearNotifier(api_token=linear_token, team_id=linear_team)
-        tasks.append(asyncio.create_task(_safe_notify("linear", notifier_l, event_name, payload)))
+        tasks.append(asyncio.create_task(_safe_notify("linear", notifier_l, event_name, payload,
+                                                       db_path=_event_db_path, scan_id=_event_scan_id)))
 
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)

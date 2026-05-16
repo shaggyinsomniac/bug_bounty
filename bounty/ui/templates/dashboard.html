@@ -23,7 +23,7 @@
   {% else %}
 
   <!-- ====================================================== KPI CARDS -->
-  <div class="grid grid-cols-2 lg:grid-cols-5 gap-4">
+  <div class="grid grid-cols-2 lg:grid-cols-6 gap-4">
 
     <!-- Programs -->
     <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
@@ -76,6 +76,19 @@
         <a href="/queue" class="text-blue-400 hover:text-blue-300">queued + running →</a>
       </div>
     </div>
+
+    <!-- Errors (24h) — Phase 17 -->
+    {% set err24 = stats.get('errors_24h', 0) %}
+    <a href="/errors?since=24h"
+       class="bg-slate-800 border rounded-lg p-4 block hover:bg-slate-750 transition-colors
+              {% if err24 > 0 %}border-amber-700{% else %}border-slate-700{% endif %}">
+      <div class="text-xs text-slate-400 uppercase tracking-wide mb-1">Errors (24h)</div>
+      <div id="kpi-errors"
+           class="text-3xl font-bold {% if err24 > 0 %}text-amber-400{% else %}text-slate-100{% endif %}">
+        {{ err24 }}
+      </div>
+      <div class="text-xs text-slate-500 mt-1">scan errors →</div>
+    </a>
 
   </div>
 
@@ -177,6 +190,12 @@
             : 'text-3xl font-bold text-slate-100';
         }
         if (el('kpi-queue')) el('kpi-queue').textContent = d.queue_depth ?? '';
+        if (el('kpi-errors')) {
+          el('kpi-errors').textContent = d.errors_24h ?? '';
+          el('kpi-errors').className = (d.errors_24h > 0)
+            ? 'text-3xl font-bold text-amber-400'
+            : 'text-3xl font-bold text-slate-100';
+        }
       } catch (_) {}
     }, 15000);
   });

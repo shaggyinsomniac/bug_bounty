@@ -113,9 +113,17 @@ class AnthropicClient:
             return cached
 
         # Make real API call
-        response_text, input_tok, output_tok = await self._call_api(
-            system, prompt, max_tokens
-        )
+        try:
+            response_text, input_tok, output_tok = await self._call_api(
+                system, prompt, max_tokens
+            )
+        except Exception as api_exc:
+            try:
+                from bounty.errors import record_error as _rec_err
+                await _rec_err(self._db_path, "", "ai", api_exc)
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
         # Estimate and record cost
         cost = input_tok * _INPUT_COST_PER_TOKEN + output_tok * _OUTPUT_COST_PER_TOKEN
