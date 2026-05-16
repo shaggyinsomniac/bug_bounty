@@ -2,6 +2,7 @@
 {% from "components/scan_row.html" import scan_row %}
 {% from "components/status_pill.html" import status_pill %}
 {% from "components/empty_state.html" import empty_state %}
+{% from "components/modal.html" import modal %}
 
 {% block title %}Scans{% endblock %}
 
@@ -11,8 +12,8 @@
   <!-- Header row -->
   <div class="flex items-center justify-between">
     <h1 class="text-2xl font-bold text-slate-100">Scans</h1>
-    <!-- New Scan button triggers modal -->
-    <button onclick="document.getElementById('new-scan-modal').showModal()"
+    <!-- New Scan button — dispatches Alpine window event to open modal -->
+    <button @click="$dispatch('open-new-scan-modal')"
             class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors flex items-center gap-2">
       <span>＋</span> New Scan
     </button>
@@ -106,14 +107,7 @@
 </div>
 
 <!-- ================================================================ NEW SCAN MODAL -->
-<dialog id="new-scan-modal"
-        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
-  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
-    <h2 class="text-lg font-semibold">New Scan</h2>
-    <button onclick="document.getElementById('new-scan-modal').close()"
-            class="text-slate-400 hover:text-white text-xl leading-none">✕</button>
-  </div>
-
+{% call modal("new-scan-modal", "New Scan") %}
   <form id="new-scan-form" class="px-6 py-4 space-y-4">
     <!-- Program -->
     <div class="flex flex-col gap-1">
@@ -172,16 +166,16 @@
   </form>
 
   <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
-    <button onclick="document.getElementById('new-scan-modal').close()"
+    <button type="button" onclick="closeModal('new-scan-modal')"
             class="px-4 py-2 text-sm text-slate-300 hover:text-white rounded transition-colors">
       Cancel
     </button>
-    <button id="ns-submit" onclick="submitNewScan()"
+    <button id="ns-submit" type="button" onclick="submitNewScan()"
             class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors disabled:opacity-50">
       Start Scan
     </button>
   </div>
-</dialog>
+{% endcall %}
 {% endblock %}
 
 {% block scripts %}
@@ -205,7 +199,7 @@ async function submitNewScan() {
     });
     if (r.ok) {
       const resp = await r.json();
-      document.getElementById('new-scan-modal').close();
+      closeModal('new-scan-modal');
       toast('Scan queued: ' + resp.scan_id, 'success');
       setTimeout(() => window.location.href = '/scans/' + resp.scan_id, 800);
     } else {

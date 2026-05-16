@@ -2,6 +2,7 @@
 {% from "components/finding_row.html" import finding_row %}
 {% from "components/scan_row.html" import scan_row %}
 {% from "components/empty_state.html" import empty_state %}
+{% from "components/modal.html" import modal %}
 
 {% block title %}{{ program.name }} — Program{% endblock %}
 
@@ -75,7 +76,7 @@
         Scope Rules
         <span class="ml-2 text-xs font-normal text-slate-500">({{ program.targets | length }})</span>
       </h2>
-      <button onclick="document.getElementById('edit-scope-modal').showModal()"
+      <button @click="$dispatch('open-edit-scope-modal')"
               class="text-xs text-blue-400 hover:text-blue-300 transition-colors">
         Edit Scope
       </button>
@@ -114,7 +115,7 @@
   <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
     <div class="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
       <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wide">Recent Scans</h2>
-      <button onclick="document.getElementById('run-scan-modal').showModal()"
+      <button @click="$dispatch('open-run-scan-modal')"
               class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors">
         ＋ Run Scan
       </button>
@@ -177,34 +178,22 @@
 
 </div>
 
-<!-- Edit Scope Modal (placeholder) -->
-<dialog id="edit-scope-modal"
-        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
-  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
-    <h2 class="text-lg font-semibold">Edit Scope</h2>
-    <button onclick="document.getElementById('edit-scope-modal').close()"
-            class="text-slate-400 hover:text-white text-xl leading-none">✕</button>
-  </div>
+<!-- Edit Scope Modal -->
+{% call modal("edit-scope-modal", "Edit Scope") %}
   <div class="px-6 py-8 text-center text-slate-400">
     <div class="text-4xl mb-3">🚧</div>
     <p class="text-sm">Manual scope edit coming in next phase.</p>
   </div>
   <div class="flex justify-end px-6 py-4 border-t border-slate-700">
-    <button onclick="document.getElementById('edit-scope-modal').close()"
+    <button type="button" onclick="closeModal('edit-scope-modal')"
             class="px-4 py-2 text-sm text-slate-300 hover:text-white rounded transition-colors">
       Close
     </button>
   </div>
-</dialog>
+{% endcall %}
 
 <!-- Run Scan Modal -->
-<dialog id="run-scan-modal"
-        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
-  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
-    <h2 class="text-lg font-semibold">Run Scan</h2>
-    <button onclick="document.getElementById('run-scan-modal').close()"
-            class="text-slate-400 hover:text-white text-xl leading-none">✕</button>
-  </div>
+{% call modal("run-scan-modal", "Run Scan") %}
   <form id="prog-scan-form" class="px-6 py-4 space-y-4">
     <div class="flex flex-col gap-1">
       <label class="text-sm font-medium text-slate-200">Scan Type</label>
@@ -232,14 +221,14 @@
     </div>
   </form>
   <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
-    <button onclick="document.getElementById('run-scan-modal').close()"
+    <button type="button" onclick="closeModal('run-scan-modal')"
             class="px-4 py-2 text-sm text-slate-300 hover:text-white rounded transition-colors">Cancel</button>
-    <button id="prog-scan-submit" onclick="submitProgramScan('{{ program.id }}')"
+    <button id="prog-scan-submit" type="button" onclick="submitProgramScan('{{ program.id }}')"
             class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors">
       Start Scan
     </button>
   </div>
-</dialog>
+{% endcall %}
 
 {% endblock %}
 
@@ -281,7 +270,7 @@ async function submitProgramScan(programId) {
     });
     if (r.ok) {
       const resp = await r.json();
-      document.getElementById('run-scan-modal').close();
+      closeModal('run-scan-modal');
       toast('Scan queued: ' + resp.scan_id, 'success');
       setTimeout(() => window.location.href = '/scans/' + resp.scan_id, 800);
     } else {

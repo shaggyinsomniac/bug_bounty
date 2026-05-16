@@ -1,0 +1,63 @@
+{% macro modal(id, title, max_width="max-w-md") %}
+{#
+  Reusable Alpine.js modal component.
+
+  Usage:
+    {% from "components/modal.html" import modal %}
+    {% call modal("my-modal", "My Title") %}
+      <div class="px-6 py-4">...body content...</div>
+      <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
+        ...footer buttons...
+      </div>
+    {% endcall %}
+
+  To open the modal from a button:
+    <button @click="$dispatch('open-my-modal')">Open</button>
+    OR:
+    <button onclick="openModal('my-modal')">Open</button>
+
+  To close from JavaScript:
+    closeModal('my-modal')
+
+  The modal listens for window-level custom events:
+    open-<id>   → opens the modal
+    close-<id>  → closes the modal
+  Escape key also closes the modal.
+#}
+{%- set var = id | replace('-', '_') -%}
+<div x-data="{ open_{{ var }}: false }"
+     x-on:open-{{ id }}.window="open_{{ var }} = true"
+     x-on:close-{{ id }}.window="open_{{ var }} = false"
+     x-on:keydown.escape.window="open_{{ var }} = false">
+
+  {# Backdrop + centered card #}
+  <div x-show="open_{{ var }}"
+       x-cloak
+       x-transition:enter="transition ease-out duration-150"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-100"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center"
+       x-on:click.self="open_{{ var }} = false">
+
+    <div class="bg-slate-800 border border-slate-600 rounded-xl {{ max_width }} w-full mx-4 shadow-2xl"
+         x-on:click.stop>
+
+      {# Header #}
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+        <h2 class="text-lg font-semibold text-slate-100">{{ title }}</h2>
+        <button x-on:click="open_{{ var }} = false"
+                type="button"
+                class="text-slate-400 hover:text-slate-200 text-xl leading-none transition-colors"
+                aria-label="Close modal">✕</button>
+      </div>
+
+      {# Body + footer — provided by caller() #}
+      {{ caller() }}
+
+    </div>
+  </div>
+</div>
+{% endmacro %}

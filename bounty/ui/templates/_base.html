@@ -30,6 +30,9 @@
   <!-- Custom CSS -->
   <link rel="stylesheet" href="/static/app.css">
 
+  <!-- Hide x-cloak elements until Alpine initialises -->
+  <style>[x-cloak]{display:none!important}</style>
+
   {% block head %}{% endblock %}
 </head>
 <body class="bg-slate-900 text-slate-100 font-sans antialiased">
@@ -155,6 +158,13 @@
 
   <!-- ================================================================ SCRIPTS -->
   <script src="/static/app.js"></script>
+
+  <!-- Modal helpers: openModal('id') / closeModal('id') dispatch Alpine window events -->
+  <script>
+    window.openModal  = id => window.dispatchEvent(new CustomEvent('open-'  + id));
+    window.closeModal = id => window.dispatchEvent(new CustomEvent('close-' + id));
+  </script>
+
   {% block scripts %}{% endblock %}
 </body>
 </html>

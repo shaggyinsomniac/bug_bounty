@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "components/modal.html" import modal %}
 
 {% block title %}Settings{% endblock %}
 
@@ -369,60 +370,45 @@
 </div>
 
 <!-- Shodan modal -->
-<dialog id="shodan-modal"
-        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
-  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
-    <h2 class="text-lg font-semibold">Set Shodan API Key</h2>
-    <button onclick="document.getElementById('shodan-modal').close()" class="text-slate-400 hover:text-white text-xl">✕</button>
-  </div>
+{% call modal("shodan-modal", "Set Shodan API Key") %}
   <div class="px-6 py-4 space-y-4">
     <input id="shodan-key" type="password" placeholder="Shodan API key"
            class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
   </div>
   <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
-    <button onclick="document.getElementById('shodan-modal').close()" class="px-4 py-2 text-sm text-slate-300 hover:text-white rounded">Cancel</button>
-    <button onclick="saveApiKey('SHODAN_API_KEY', 'shodan-key', 'shodan-modal')"
+    <button type="button" onclick="closeModal('shodan-modal')" class="px-4 py-2 text-sm text-slate-300 hover:text-white rounded">Cancel</button>
+    <button type="button" onclick="saveApiKey('SHODAN_API_KEY', 'shodan-key', 'shodan-modal')"
             class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded">Save</button>
   </div>
-</dialog>
+{% endcall %}
 
 <!-- Discord findings webhook modal -->
-<dialog id="discord-findings-modal"
-        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
-  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
-    <h2 class="text-lg font-semibold">Discord Webhook — Findings</h2>
-    <button onclick="document.getElementById('discord-findings-modal').close()" class="text-slate-400 hover:text-white text-xl">✕</button>
-  </div>
+{% call modal("discord-findings-modal", "Discord Webhook — Findings") %}
   <div class="px-6 py-4">
     <input id="discord-findings-key" type="text" placeholder="https://discord.com/api/webhooks/..."
            value="{{ discord_webhook_findings }}"
            class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
   </div>
   <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
-    <button onclick="document.getElementById('discord-findings-modal').close()" class="px-4 py-2 text-sm text-slate-300 rounded">Cancel</button>
-    <button onclick="saveApiKey('DISCORD_WEBHOOK_FINDINGS', 'discord-findings-key', 'discord-findings-modal')"
+    <button type="button" onclick="closeModal('discord-findings-modal')" class="px-4 py-2 text-sm text-slate-300 rounded">Cancel</button>
+    <button type="button" onclick="saveApiKey('DISCORD_WEBHOOK_FINDINGS', 'discord-findings-key', 'discord-findings-modal')"
             class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded">Save</button>
   </div>
-</dialog>
+{% endcall %}
 
 <!-- Discord secrets webhook modal -->
-<dialog id="discord-secrets-modal"
-        class="bg-slate-800 border border-slate-600 rounded-xl text-slate-100 p-0 max-w-md w-full backdrop:bg-black/60">
-  <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
-    <h2 class="text-lg font-semibold">Discord Webhook — Live Secrets</h2>
-    <button onclick="document.getElementById('discord-secrets-modal').close()" class="text-slate-400 hover:text-white text-xl">✕</button>
-  </div>
+{% call modal("discord-secrets-modal", "Discord Webhook — Live Secrets") %}
   <div class="px-6 py-4">
     <input id="discord-secrets-key" type="text" placeholder="https://discord.com/api/webhooks/..."
            value="{{ discord_webhook_secrets }}"
            class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-500">
   </div>
   <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-700">
-    <button onclick="document.getElementById('discord-secrets-modal').close()" class="px-4 py-2 text-sm text-slate-300 rounded">Cancel</button>
-    <button onclick="saveApiKey('DISCORD_WEBHOOK_SECRETS', 'discord-secrets-key', 'discord-secrets-modal')"
+    <button type="button" onclick="closeModal('discord-secrets-modal')" class="px-4 py-2 text-sm text-slate-300 rounded">Cancel</button>
+    <button type="button" onclick="saveApiKey('DISCORD_WEBHOOK_SECRETS', 'discord-secrets-key', 'discord-secrets-modal')"
             class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded">Save</button>
   </div>
-</dialog>
+{% endcall %}
 
 {% endblock %}
 
@@ -509,7 +495,7 @@ async function saveApiKey(key, inputId, modalId) {
       body: JSON.stringify({ key, value: val }),
     });
     if (r.ok) {
-      document.getElementById(modalId).close();
+      closeModal(modalId);
       toast('Setting saved (restart required)', 'success');
     } else {
       const err = await r.json().catch(() => ({}));
